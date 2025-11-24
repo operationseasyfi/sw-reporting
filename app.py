@@ -1,12 +1,97 @@
 from flask import Flask, render_template, jsonify, request
 from models import Session, SMSLog
-from tasks import process_webhook_event, sync_historical_data, celery
 from sqlalchemy import func, text
+from sqlalchemy.dialects.postgresql import insert
 import datetime
 import os
 from datetime import timedelta
 
 app = Flask(__name__)
+
+# Try to import Celery tasks (optional - works without it)
+try:
+    from tasks import process_webhook_event, sync_historical_data, celery
+    CELERY_AVAILABLE = True
+except Exception:
+    CELERY_AVAILABLE = False
+    print("Celery not available - webhooks will be processed synchronously")
+
+def process_webhook_sync(data):
+    """
+    Synchronous webhook processor (works without Celery/Redis).
+    Handles real-time status updates from SignalWire DLR Webhooks.
+    """
+    session = Session()
+    try:
+        message_sid = data.get('MessageSid') or data.get('SmsSid')
+        if not message_sid:
+            print("Warning: Webhook missing MessageSid")
+            return
+        
+        # Parse status - normalize to lowercase for consistency
+        status = (data.get('MessageStatus') or data.get('SmsStatus') or 'unknown').lower()
+        
+        # Parse error code if present
+        error_code = None
+        error_code_str = data.get('ErrorCode') or data.get('SmsErrorCode')
+        if error_code_str:
+            try:
+                error_code = int(error_code_str)
+            except (ValueError, TypeError):
+                pass
+        
+        # Parse timestamps if available
+        date_created = datetime.datetime.utcnow()
+        date_sent = None
+        
+        # Try to parse DateCreated if provided
+        date_created_str = data.get('DateCreated')
+        if date_created_str:
+            try:
+                from datetime import datetime as dt_parse
+                try:
+                    date_created = dt_parse.strptime(date_created_str, '%a, %d %b %Y %H:%M:%S %z')
+                except:
+                    date_created = datetime.datetime.utcnow()
+            except:
+                pass
+        
+        # Set date_sent if status indicates sent
+        if status in ['sent', 'delivered', 'failed', 'undelivered']:
+            date_sent = datetime.datetime.utcnow()
+        
+        stmt = insert(SMSLog).values(
+            id=message_sid,
+            status=status,
+            to_number=data.get('To'),
+            from_number=data.get('From'),
+            date_created=date_created,
+            date_sent=date_sent,
+            error_code=error_code,
+            error_message=data.get('ErrorMessage') or data.get('SmsErrorMessage'),
+            direction=data.get('Direction', 'outbound-api'),
+            body=data.get('Body') or data.get('MessageBody')
+        )
+        
+        # Update columns on conflict (upsert)
+        do_update_stmt = stmt.on_conflict_do_update(
+            index_elements=['id'],
+            set_={
+                'status': stmt.excluded.status,
+                'error_code': stmt.excluded.error_code,
+                'error_message': stmt.excluded.error_message,
+                'date_sent': stmt.excluded.date_sent
+            }
+        )
+
+        session.execute(do_update_stmt)
+        session.commit()
+        
+    except Exception as exc:
+        session.rollback()
+        print(f"Webhook processing error: {exc}")
+    finally:
+        session.close()
 
 @app.route('/')
 def index():
@@ -15,25 +100,46 @@ def index():
 @app.route('/webhooks/signalwire', methods=['POST'])
 def signalwire_webhook():
     """
-    High-performance webhook endpoint.
-    Does almost ZERO work. Just pushes payload to Redis Queue.
+    Webhook endpoint for SignalWire DLR notifications.
+    Works with or without Celery - processes synchronously if Celery unavailable.
     """
     data = request.form.to_dict()
-    process_webhook_event.delay(data)
-    return '', 200
+    
+    # Try Celery if available, otherwise process directly
+    if CELERY_AVAILABLE:
+        try:
+            process_webhook_event.delay(data)
+            return '', 200
+        except Exception:
+            # Fallback to sync if Celery fails
+            process_webhook_sync(data)
+            return '', 200
+    else:
+        # Process synchronously
+        process_webhook_sync(data)
+        return '', 200
 
 @app.route('/api/trigger-sync', methods=['POST'])
 def trigger_sync():
     """Manually trigger historical sync via API"""
+    if not CELERY_AVAILABLE:
+        return jsonify({'status': 'Sync not available - Celery not configured'}), 503
+    
     days = request.json.get('days', 30)
-    sync_historical_data.delay(days_back=days)
-    return jsonify({'status': 'Sync started in background'}), 202
+    try:
+        sync_historical_data.delay(days_back=days)
+        return jsonify({'status': 'Sync started in background'}), 202
+    except Exception as e:
+        return jsonify({'status': f'Sync failed: {str(e)}'}), 500
 
 @app.route('/api/sync-status')
 def sync_status():
     """
     Check if any sync tasks are currently running.
     """
+    if not CELERY_AVAILABLE:
+        return jsonify({'syncing': False})
+    
     try:
         i = celery.control.inspect()
         active = i.active()
