@@ -3,7 +3,10 @@
 import os
 import sys
 
+# Get port from environment or default to 5000
 port = os.getenv('PORT', '5000')
+
+print(f"Starting Gunicorn on port {port}...")
 
 # Start gunicorn
 os.execvp('gunicorn', [
