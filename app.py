@@ -1,11 +1,11 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory, send_from_directory
 from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert
 import datetime
 import os
 from datetime import timedelta
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='frontend/dist', template_folder='frontend/dist')
 
 # Import models with error handling
 try:
@@ -122,7 +122,20 @@ def check_db():
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    """Serve React app"""
+    return send_from_directory('frontend/dist', 'index.html')
+
+@app.route('/<path:path>')
+def serve_react(path):
+    """Serve React static files"""
+    if path.startswith('api/') or path.startswith('webhooks/'):
+        # Don't interfere with API routes
+        return None
+    try:
+        return send_from_directory('frontend/dist', path)
+    except:
+        # Fallback to index.html for React Router
+        return send_from_directory('frontend/dist', 'index.html')
 
 @app.route('/health')
 def health_check():
