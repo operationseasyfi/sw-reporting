@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#050505] text-[#e5e5e5] overflow-hidden selection:bg-[#00f0ff] selection:text-black;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    @apply w-1.5 h-1.5;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-[#0a0a0a]; 
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-[#333] rounded-full hover:bg-[#555]; 
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-[#0a0a0a]/60 backdrop-blur-xl border border-white/[0.08];
+  }
+
+  .neon-text-glow {
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+  }
+
+  .grid-bg {
+    background-image: 
+      linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
+  }
+  
+  .text-neon-blue { color: #00f0ff; }
+  .text-neon-green { color: #0aff0a; }
+  .text-neon-red { color: #ff003c; }
+  .text-neon-amber { color: #ffae00; }
+  .text-neon-purple { color: #bc13fe; }
+
+  .bg-neon-blue { background-color: #00f0ff; }
+  .bg-neon-green { background-color: #0aff0a; }
+  .bg-neon-red { background-color: #ff003c; }
+  .bg-neon-amber { background-color: #ffae00; }
+  .bg-neon-purple { background-color: #bc13fe; }
+
+  .border-neon-blue { border-color: #00f0ff; }
+  .border-neon-green { border-color: #0aff0a; }
+  .border-neon-red { border-color: #ff003c; }
+  .border-neon-amber { border-color: #ffae00; }
+  .border-neon-purple { border-color: #bc13fe; }
+  
+  .font-display { font-family: 'Space Grotesk', sans-serif; }
+  .font-mono { font-family: 'JetBrains Mono', monospace; }
+}

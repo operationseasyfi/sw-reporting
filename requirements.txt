@@ -1,0 +1,8 @@
+flask
+psycopg2-binary
+sqlalchemy
+celery
+redis
+python-dotenv
+signalwire
+gunicorn

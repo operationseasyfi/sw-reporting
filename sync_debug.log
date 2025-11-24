@@ -1,0 +1,116 @@
+2025-11-24 12:09:13,461 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': 'e006c02c-07d0-4e48-8c2c-102c6debeb13', 'date_created': datetime.datetime(2025, 11, 23, 23, 56, 26, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 23, 23, 56, 26, tzinfo=<UTC>), 'to_number': '+14804275647', 'from_number': '+13053158269', 'status': 'delivered', 'error_code': None, 'error_message': None, 'direction': 'outbound-api', 'price': 0.00715, 'body': "You've been unsubscribed from messages and will no longer receive SMS offers or alerts."}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:09:13,826 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': 'f1db6271-41da-42f9-80b7-91b0c6b83441', 'date_created': datetime.datetime(2025, 11, 22, 22, 0, 58, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 22, 22, 0, 58, tzinfo=<UTC>), 'to_number': '+13053158269', 'from_number': '+16155801262', 'status': 'received', 'error_code': None, 'error_message': None, 'direction': 'inbound', 'price': 0.00415, 'body': 'STOP'}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:09:14,631 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': '7f34d292-996b-44e7-ac88-c4a6fab2ea42', 'date_created': datetime.datetime(2025, 11, 23, 5, 29, 30, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 23, 5, 29, 30, tzinfo=<UTC>), 'to_number': '+13053158269', 'from_number': '+15414053144', 'status': 'received', 'error_code': None, 'error_message': None, 'direction': 'inbound', 'price': 0.00415, 'body': 'Stop'}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:09:16,510 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': '2f302a49-c1f8-4995-8358-78356bf1d49b', 'date_created': datetime.datetime(2025, 11, 22, 14, 49, 25, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 22, 14, 49, 25, tzinfo=<UTC>), 'to_number': '+12393748217', 'from_number': '+19109640636', 'status': 'received', 'error_code': None, 'error_message': None, 'direction': 'inbound', 'price': 0.00715, 'body': 'Stop '}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:09:18,226 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': '0b74349d-e0d1-41a4-be0c-24b647cf94e9', 'date_created': datetime.datetime(2025, 11, 22, 3, 34, 31, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 22, 3, 34, 32, tzinfo=<UTC>), 'to_number': '+14086036341', 'from_number': '+13053158269', 'status': 'delivered', 'error_code': None, 'error_message': None, 'direction': 'outbound-api', 'price': 0.00715, 'body': "You've been unsubscribed from messages and will no longer receive SMS offers or alerts."}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:10:10,036 ERROR:Error fetching 2025-11-21: ('Unable to fetch page', HTTP 502 
+<html><head>
+<meta http-equiv="content-type" content="text/html;charset=utf-8">
+<title>502 Server Error</title>
+</head>
+<body text=#000000 bgcolor=#ffffff>
+<h1>Error: Server Error</h1>
+<h2>The server encountered a temporary error and could not complete your request.<p>Please try again in 30 seconds.</h2>
+<h2></h2>
+</body></html>
+)
+2025-11-24 12:10:10,045 ERROR:Error fetching 2025-11-24: ('Unable to fetch page', HTTP 502 
+<html><head>
+<meta http-equiv="content-type" content="text/html;charset=utf-8">
+<title>502 Server Error</title>
+</head>
+<body text=#000000 bgcolor=#ffffff>
+<h1>Error: Server Error</h1>
+<h2>The server encountered a temporary error and could not complete your request.<p>Please try again in 30 seconds.</h2>
+<h2></h2>
+</body></html>
+)
+2025-11-24 12:10:10,047 ERROR:Error fetching 2025-11-20: ('Unable to fetch page', HTTP 502 
+<html><head>
+<meta http-equiv="content-type" content="text/html;charset=utf-8">
+<title>502 Server Error</title>
+</head>
+<body text=#000000 bgcolor=#ffffff>
+<h1>Error: Server Error</h1>
+<h2>The server encountered a temporary error and could not complete your request.<p>Please try again in 30 seconds.</h2>
+<h2></h2>
+</body></html>
+)
+2025-11-24 12:10:12,058 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': '501c8486-a08f-423d-87c7-666bb8626a68', 'date_created': datetime.datetime(2025, 11, 22, 0, 40, 16, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 22, 0, 40, 17, tzinfo=<UTC>), 'to_number': '+13368292087', 'from_number': '+12393748217', 'status': 'delivered', 'error_code': None, 'error_message': None, 'direction': 'outbound-api', 'price': 0.00615, 'body': "You've been unsubscribed from messages and will no longer receive SMS offers or alerts."}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:10:13,257 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': '601f52cf-2332-4182-b345-5fb557575e2a', 'date_created': datetime.datetime(2025, 11, 15, 22, 17, 43, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 15, 22, 17, 43, tzinfo=<UTC>), 'to_number': '+13053158269', 'from_number': '+13526508860', 'status': 'received', 'error_code': None, 'error_message': None, 'direction': 'inbound', 'price': 0.02145, 'body': "Imiiimimmiiimimimimkiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiikiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiijiiikjiiijikiiiiiiiijikiiiiiiiiiiiiiikii ... (110 characters truncated) ...  j\n\n. cc \n. ,    n.   ''\nRy but 88 26210-26258 US Hwy 19 N, Clearwater, FL 33761, USA\nhttps://maps.google.com/maps?f=q&q=(28.0110586,-82.735543)"}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:10:13,596 ERROR:Error fetching 2025-11-19: ('Unable to fetch page', HTTP 502 
+<html><head>
+<meta http-equiv="content-type" content="text/html;charset=utf-8">
+<title>502 Server Error</title>
+</head>
+<body text=#000000 bgcolor=#ffffff>
+<h1>Error: Server Error</h1>
+<h2>The server encountered a temporary error and could not complete your request.<p>Please try again in 30 seconds.</h2>
+<h2></h2>
+</body></html>
+)
+2025-11-24 12:10:14,430 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': 'a955310e-e435-45af-836f-5ee1385e95e5', 'date_created': datetime.datetime(2025, 11, 15, 19, 6, 40, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 15, 19, 6, 40, tzinfo=<UTC>), 'to_number': '+15612670951', 'from_number': '+13053158269', 'status': 'delivered', 'error_code': None, 'error_message': None, 'direction': 'outbound-api', 'price': 0.00615, 'body': "You've been unsubscribed from messages and will no longer receive SMS offers or alerts."}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:10:16,096 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': '736fd3ac-8f63-414f-98fc-628cbd682eda', 'date_created': datetime.datetime(2025, 11, 15, 15, 7, 15, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 15, 15, 7, 15, tzinfo=<UTC>), 'to_number': '+19047500050', 'from_number': '+13144655995', 'status': 'received', 'error_code': None, 'error_message': None, 'direction': 'inbound', 'price': 0.00415, 'body': 'https://www.tiktok.com/t/ZTMwJo387/'}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:10:18,025 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': 'c5206888-dee7-4ca9-a063-9ab85d177933', 'date_created': datetime.datetime(2025, 11, 15, 2, 56, 53, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 15, 2, 56, 53, tzinfo=<UTC>), 'to_number': '+13053158269', 'from_number': '+19106853609', 'status': 'received', 'error_code': None, 'error_message': None, 'direction': 'inbound', 'price': 0.00415, 'body': 'Stop'}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:10:27,590 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': 'e18fca83-5604-4d48-af6b-c01b82a77444', 'date_created': datetime.datetime(2025, 11, 15, 0, 34, 32, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 15, 0, 34, 32, tzinfo=<UTC>), 'to_number': '+13053158269', 'from_number': '+13863152982', 'status': 'received', 'error_code': None, 'error_message': None, 'direction': 'inbound', 'price': 0.00715, 'body': 'H'}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+2025-11-24 12:10:45,380 ERROR:Database Error: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(psycopg2.errors.StringDataRightTruncation) value too long for type character varying(34)
+
+[SQL: INSERT INTO sms_logs (id, date_created, date_sent, to_number, from_number, status, error_code, error_message, direction, price, body) VALUES (%(id)s, %(date_created)s, %(date_sent)s, %(to_number)s, %(from_number)s, %(status)s, %(error_code)s, %(error_message)s, %(direction)s, %(price)s, %(body)s)]
+[parameters: {'id': 'a3daddac-7d59-49fe-ae57-fbc81ac7a32d', 'date_created': datetime.datetime(2025, 11, 18, 23, 59, 36, tzinfo=<UTC>), 'date_sent': datetime.datetime(2025, 11, 18, 23, 59, 37, tzinfo=<UTC>), 'to_number': '+13462281628', 'from_number': '+13053158269', 'status': 'delivered', 'error_code': None, 'error_message': None, 'direction': 'outbound-api', 'price': 0.00615, 'body': "Connie, Open Enrollment is LIVE! Don't miss $0 health plan options. Call 855-635-4185 for a free review. Msg&data rates apply. Reply STOP to opt out"}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)

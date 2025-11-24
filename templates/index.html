@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalWire Elite Dashboard</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Bootstrap 5 & Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    
+    <!-- DataTables Dark -->
+    <link href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <style>
+        :root {
+            --bs-body-font-family: 'Inter', sans-serif;
+            --sw-purple: #7000ff;
+            --sw-purple-dark: #4a00e0;
+            --bg-card: #1e2129;
+            --bg-body: #0f1116;
+        }
+        
+        body {
+            background-color: var(--bg-body);
+            color: #e0e0e0;
+        }
+
+        .navbar {
+            background-color: rgba(30, 33, 41, 0.95) !important;
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+            margin-bottom: 24px;
+        }
+
+        .card-header {
+            background-color: transparent;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            color: #8b949e;
+            padding: 1rem 1.5rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, var(--sw-purple), var(--sw-purple-dark));
+            border: none;
+            font-weight: 600;
+            padding: 0.5rem 1.5rem;
+        }
+        
+        .btn-primary:hover {
+            box-shadow: 0 0 15px rgba(112, 0, 255, 0.4);
+        }
+
+        /* DataTables Customization */
+        .table {
+            --bs-table-bg: transparent;
+            --bs-table-color: #c9d1d9;
+            border-color: rgba(255,255,255,0.05);
+        }
+        
+        .page-link {
+            background-color: var(--bg-card);
+            border-color: rgba(255,255,255,0.05);
+            color: #c9d1d9;
+        }
+        
+        .page-item.active .page-link {
+            background-color: var(--sw-purple);
+            border-color: var(--sw-purple);
+        }
+
+        /* Status Badges */
+        .badge {
+            font-weight: 500;
+            padding: 0.5em 0.8em;
+            border-radius: 6px;
+        }
+        .badge-delivered { background-color: rgba(25, 135, 84, 0.2); color: #2ea043; border: 1px solid rgba(25, 135, 84, 0.3); }
+        .badge-failed { background-color: rgba(220, 53, 69, 0.2); color: #f85149; border: 1px solid rgba(220, 53, 69, 0.3); }
+        .badge-undelivered { background-color: rgba(255, 193, 7, 0.1); color: #dbab09; border: 1px solid rgba(255, 193, 7, 0.2); }
+        .badge-queued { background-color: rgba(13, 110, 253, 0.2); color: #58a6ff; border: 1px solid rgba(13, 110, 253, 0.3); }
+
+        /* Chart Canvas Container */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark mb-5 fixed-top">
+    <div class="container-fluid px-4">
+        <a class="navbar-brand d-flex align-items-center gap-2" href="#">
+            <i class="bi bi-activity text-primary"></i>
+            <span class="fw-bold">SignalWire <span class="fw-light opacity-75">Analytics</span></span>
+        </a>
+        <div class="d-flex align-items-center gap-3">
+            <div id="sync-indicator" class="text-muted small">
+                <i class="bi bi-clock-history me-1"></i> Last checked: Just now
+            </div>
+            <button class="btn btn-primary btn-sm rounded-pill" onclick="triggerSync()">
+                <i class="bi bi-arrow-repeat me-1"></i> Sync Data
+            </button>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid px-4" style="margin-top: 80px;">
+    
+    <!-- Key Metrics Row (Real-time Estimates) -->
+    <div class="row mb-4">
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-0 border-start border-4 border-primary h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-uppercase text-muted small fw-bold mb-1">Total Processed</div>
+                            <div class="h3 mb-0 fw-bold" id="total-stat">-</div>
+                        </div>
+                        <i class="bi bi-envelope-paper fs-1 text-primary opacity-25"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-0 border-start border-4 border-success h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-uppercase text-muted small fw-bold mb-1">Delivered</div>
+                            <div class="h3 mb-0 fw-bold text-success" id="delivered-stat">-</div>
+                        </div>
+                        <i class="bi bi-check-circle fs-1 text-success opacity-25"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-0 border-start border-4 border-warning h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-uppercase text-muted small fw-bold mb-1">Undelivered</div>
+                            <div class="h3 mb-0 fw-bold text-warning" id="undelivered-stat">-</div>
+                        </div>
+                        <i class="bi bi-exclamation-triangle fs-1 text-warning opacity-25"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-0 border-start border-4 border-danger h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-uppercase text-muted small fw-bold mb-1">Failed</div>
+                            <div class="h3 mb-0 fw-bold text-danger" id="failed-stat">-</div>
+                        </div>
+                        <i class="bi bi-x-octagon fs-1 text-danger opacity-25"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>Message Traffic (30 Days)</span>
+                    <select class="form-select form-select-sm w-auto bg-dark text-light border-secondary" id="chart-range">
+                        <option value="30">Last 30 Days</option>
+                        <option value="7">Last 7 Days</option>
+                    </select>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="trafficChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">Error Distribution</div>
+                <div class="card-body">
+                    <div class="chart-container" style="height: 300px;">
+                        <canvas id="errorChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Logs -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-list-ul me-2"></i>Live Message Logs</span>
+            <button class="btn btn-sm btn-outline-secondary" onclick="$('#logsTable').DataTable().ajax.reload()">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table id="logsTable" class="table table-hover align-middle w-100">
+                    <thead>
+                        <tr>
+                            <th>Time (UTC)</th>
+                            <th>From</th>
+                            <th>To</th>
+                            <th>Status</th>
+                            <th>Error Code</th>
+                            <th>Direction</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Scripts -->
+<script src="https://code.jquery.com/jquery-3.7.0.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+    // Dark Mode Defaults for Chart.js
+    Chart.defaults.color = '#8b949e';
+    Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.05)';
+
+    let trafficChartInstance = null;
+    let errorChartInstance = null;
+
+    $(document).ready(function() {
+        initDataTable();
+        loadDashboardData();
+        
+        // Refresh dashboard stats every 30 seconds
+        setInterval(loadDashboardData, 30000);
+    });
+
+    function initDataTable() {
+        $('#logsTable').DataTable({
+            serverSide: true,
+            processing: true,
+            ajax: {
+                url: '/api/logs_dt',
+                type: 'GET',
+                error: function (xhr, error, thrown) {
+                    console.log("DataTables Error:", xhr.responseText);
+                }
+            },
+            columns: [
+                { 
+                    data: 'date_created',
+                    render: function(data) {
+                        return new Date(data).toLocaleString();
+                    }
+                },
+                { data: 'from_number' },
+                { data: 'to_number' },
+                { 
+                    data: 'status',
+                    render: function(data) {
+                        let cls = 'badge-queued';
+                        if(data === 'delivered') cls = 'badge-delivered';
+                        if(data === 'failed') cls = 'badge-failed';
+                        if(data === 'undelivered') cls = 'badge-undelivered';
+                        if(data === 'sent') cls = 'badge-delivered';
+                        return `<span class="badge ${cls}">${data}</span>`;
+                    }
+                },
+                { 
+                    data: 'error_code',
+                    render: function(data) {
+                        return data ? `<span class="text-danger font-monospace">${data}</span>` : '<span class="text-muted">-</span>';
+                    }
+                },
+                { data: 'direction' },
+                {
+                    data: null,
+                    orderable: false,
+                    render: function(data) {
+                         return `<button class="btn btn-sm btn-link text-muted"><i class="bi bi-info-circle"></i></button>`;
+                    }
+                }
+            ],
+            order: [[ 0, 'desc' ]],
+            pageLength: 10,
+            language: {
+                search: "_INPUT_",
+                searchPlaceholder: "Search phone numbers or IDs...",
+            },
+            dom: '<"d-flex justify-content-between align-items-center mb-3"f<"ms-2"l>>rtip',
+        });
+    }
+
+    async function loadDashboardData() {
+        try {
+            // 1. Timeseries Data
+            const tResp = await fetch('/api/stats/timeseries');
+            const tData = await tResp.json();
+            renderTrafficChart(tData);
+
+            // 2. Error Data
+            const eResp = await fetch('/api/stats/errors');
+            const eData = await eResp.json();
+            renderErrorChart(eData);
+
+            // 3. Quick Stats (Client-side aggregation of the timeseries for now, 
+            // ideally this should be a separate endpoint for total counts)
+            updateQuickStats(tData);
+
+        } catch (err) {
+            console.error("Failed to load dashboard data", err);
+        }
+    }
+
+    function updateQuickStats(data) {
+        let total = 0, delivered = 0, failed = 0, undelivered = 0;
+        
+        Object.values(data).forEach(day => {
+            total += day.total || 0;
+            delivered += day.delivered || 0;
+            failed += day.failed || 0;
+            undelivered += day.undelivered || 0;
+        });
+
+        $('#total-stat').text(total.toLocaleString());
+        $('#delivered-stat').text(delivered.toLocaleString());
+        $('#failed-stat').text(failed.toLocaleString());
+        $('#undelivered-stat').text(undelivered.toLocaleString());
+    }
+
+    function renderTrafficChart(data) {
+        const ctx = document.getElementById('trafficChart').getContext('2d');
+        
+        // Sort dates
+        const labels = Object.keys(data).sort();
+        const delivered = labels.map(d => data[d].delivered);
+        const failed = labels.map(d => data[d].failed);
+        const undelivered = labels.map(d => data[d].undelivered);
+
+        if (trafficChartInstance) trafficChartInstance.destroy();
+
+        const gradientSuccess = ctx.createLinearGradient(0, 0, 0, 400);
+        gradientSuccess.addColorStop(0, 'rgba(25, 135, 84, 0.5)');
+        gradientSuccess.addColorStop(1, 'rgba(25, 135, 84, 0.0)');
+
+        trafficChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Delivered',
+                        data: delivered,
+                        borderColor: '#2ea043',
+                        backgroundColor: gradientSuccess,
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Undelivered',
+                        data: undelivered,
+                        borderColor: '#dbab09',
+                        backgroundColor: 'transparent',
+                        borderDash: [5, 5],
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Failed',
+                        data: failed,
+                        borderColor: '#f85149',
+                        backgroundColor: 'transparent',
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' }
+                },
+                scales: {
+                    y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+    }
+
+    function renderErrorChart(data) {
+        const ctx = document.getElementById('errorChart').getContext('2d');
+        if (errorChartInstance) errorChartInstance.destroy();
+
+        errorChartInstance = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: data.map(e => `Error ${e.code}`),
+                datasets: [{
+                    data: data.map(e => e.count),
+                    backgroundColor: ['#f85149', '#dbab09', '#a371f7', '#58a6ff', '#3fb950'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right' }
+                },
+                cutout: '70%'
+            }
+        });
+    }
+
+    function triggerSync() {
+        fetch('/api/trigger-sync', { 
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({days: 30})
+        });
+        
+        // Show toast/alert
+        const btn = document.querySelector('.btn-primary');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>Syncing...`;
+        btn.disabled = true;
+        
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            alert("Sync process started in the background.");
+        }, 2000);
+    }
+</script>
+</body>
+</html>

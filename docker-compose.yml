@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # Postgres Database
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: signalwire_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Redis for Caching & Celery Queue
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6380:6379"
+
+  # Flask Web App (Backend API)
+  web:
+    build: .
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/signalwire_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SIGNALWIRE_PROJECT_ID=${SIGNALWIRE_PROJECT_ID}
+      - SIGNALWIRE_AUTH_TOKEN=${SIGNALWIRE_AUTH_TOKEN}
+      - SIGNALWIRE_SPACE_URL=${SIGNALWIRE_SPACE_URL}
+    depends_on:
+      - db
+      - redis
+    command: gunicorn --bind 0.0.0.0:5000 app:app
+
+  # React Frontend
+  frontend:
+    build: ./frontend
+    restart: always
+    ports:
+      - "5173:5173"
+    depends_on:
+      - web
+    environment:
+      - VITE_API_URL=http://localhost:5000
+
+  # Celery Worker for Background Tasks
+  worker:
+    build: .
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/signalwire_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SIGNALWIRE_PROJECT_ID=${SIGNALWIRE_PROJECT_ID}
+      - SIGNALWIRE_AUTH_TOKEN=${SIGNALWIRE_AUTH_TOKEN}
+      - SIGNALWIRE_SPACE_URL=${SIGNALWIRE_SPACE_URL}
+    depends_on:
+      - db
+      - redis
+    command: celery -A tasks.celery worker --loglevel=info --concurrency=10
+
+volumes:
+  postgres_data:
+
