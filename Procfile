@@ -1,2 +1,2 @@
-web: /bin/bash -c "gunicorn --bind 0.0.0.0:\$PORT --workers 2 --timeout 120 app:app"
+web: python railway_start.py
 
