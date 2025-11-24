@@ -72,8 +72,8 @@ export const LogStream: React.FC<LogStreamProps> = ({ logs, paused, setPaused })
              </div>
              <div className="col-span-2 text-gray-300">{log.from}</div>
              <div className="col-span-2 text-gray-300">{log.to}</div>
-             <div className="col-span-2 text-gray-400">{log.carrier}</div>
-             <div className="col-span-1 text-gray-400">{log.latency}ms</div>
+             <div className="col-span-2 text-gray-400">{log.carrier || '—'}</div>
+             <div className="col-span-1 text-gray-400">{typeof log.latency === 'number' ? `${log.latency}ms` : '—'}</div>
              <div className="col-span-2 flex justify-end">
                <Badge variant={
                    log.status === 'DELIVERED' || log.status === 'SENT' ? 'success' : 

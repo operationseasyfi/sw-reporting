@@ -3,7 +3,6 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Treemap } 
 import { Activity, ArrowUpRight, ArrowDownRight, Zap, AlertTriangle, DollarSign, Database } from 'lucide-react';
 import { LogStream } from './LogStream';
 import { LogEntry, TimeSeriesPoint, ErrorCluster } from '../types';
-import { generateLogEntry, ERROR_CLUSTERS } from '../constants';
 
 // Helper to fetch real logs
 async function fetchLogs(): Promise<LogEntry[]> {
@@ -12,19 +11,24 @@ async function fetchLogs(): Promise<LogEntry[]> {
         if (!res.ok) return [];
         const data = await res.json();
         // Map backend DB model to UI LogEntry
-        return data.data.map((row: any) => ({
-            id: row.id,
-            timestamp: row.date_created,
-            from: row.from_number,
-            to: row.to_number,
-            carrier: 'Unknown', // Backend doesn't have carrier info yet
-            status: row.status?.toUpperCase() || 'UNKNOWN',
-            errorCode: row.error_code ? String(row.error_code) : undefined,
-            latency: Math.floor(Math.random() * 200 + 100), // Fake latency for now
-            type: 'SMS',
-            direction: row.direction === 'inbound' ? 'MO' : 'MT',
-            cost: row.price || 0
-        }));
+        return data.data.map((row: any) => {
+            const created = row.date_created ? new Date(row.date_created) : null;
+            const sent = row.date_sent ? new Date(row.date_sent) : null;
+            const latency = created && sent ? Math.max(sent.getTime() - created.getTime(), 0) : undefined;
+            return {
+                id: row.id,
+                timestamp: row.date_created,
+                from: row.from_number,
+                to: row.to_number,
+                carrier: row.carrier || '—',
+                status: (row.status || 'UNKNOWN').toUpperCase(),
+                errorCode: row.error_code ? String(row.error_code) : undefined,
+                latency,
+                type: row.body && row.body.length > 160 ? 'MMS' : 'SMS',
+                direction: row.direction === 'inbound' ? 'MO' : 'MT',
+                cost: row.price || 0
+            } as LogEntry;
+        });
     } catch (e) {
         console.error("Failed to fetch logs", e);
         return [];
@@ -37,19 +41,34 @@ async function fetchTimeSeries(): Promise<TimeSeriesPoint[]> {
         if(!res.ok) return [];
         const data = await res.json();
         
-        // Transform { "2023-10-25": { delivered: 10... } } to array
-        // Sorting by date keys
         const sortedKeys = Object.keys(data).sort();
         return sortedKeys.map(dateStr => {
             const day = data[dateStr];
             return {
                 time: dateStr,
                 throughput: day.total,
-                latency: Math.floor(Math.random() * 50 + 100), // Placeholder
+                latency: day.latencyAvg || 0,
                 errors: day.failed
             };
         });
     } catch(e) {
+        return [];
+    }
+}
+
+async function fetchErrorClusters(): Promise<ErrorCluster[]> {
+    try {
+        const res = await fetch('/api/stats/errors');
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.map((item: any) => ({
+            code: item.code,
+            description: `Error ${item.code}`,
+            count: item.count,
+            severity: item.count > 1000 ? 'critical' : item.count > 500 ? 'high' : item.count > 100 ? 'medium' : 'low'
+        }));
+    } catch (e) {
+        console.error("Failed to fetch error clusters", e);
         return [];
     }
 }
@@ -59,15 +78,24 @@ export const Dashboard: React.FC = () => {
   const [chartData, setChartData] = useState<TimeSeriesPoint[]>([]);
   const [paused, setPaused] = useState(false);
   const [hoveredCluster, setHoveredCluster] = useState<ErrorCluster | null>(null);
+  const [errorClusters, setErrorClusters] = useState<ErrorCluster[]>([]);
+  const [kpis, setKpis] = useState({
+    successRate: 0,
+    spend: 0,
+    failed: 0,
+    activeSegments: 0,
+    avgLatency: 0,
+    totalVolume: 0
+  });
 
   // Initialize Data
   useEffect(() => {
     // Initial Fetch
-    Promise.all([fetchLogs(), fetchTimeSeries()]).then(([realLogs, realChart]) => {
-        if (realLogs.length > 0) setLogs(realLogs);
-        else setLogs(Array.from({ length: 15 }).map(generateLogEntry)); // Fallback to fake if empty
-
-        if (realChart.length > 0) setChartData(realChart);
+    Promise.all([fetchLogs(), fetchTimeSeries(), fetchErrorClusters()]).then(([realLogs, realChart, clusterData]) => {
+        setLogs(realLogs);
+        setChartData(realChart);
+        setErrorClusters(clusterData);
+        computeKpis(realLogs, realChart);
     });
   }, []);
 
@@ -83,10 +111,7 @@ export const Dashboard: React.FC = () => {
       const newLogs = await fetchLogs();
       if (newLogs.length > 0) {
           setLogs(newLogs);
-      } else {
-          // Fallback simulation if offline/empty
-          const newLog = generateLogEntry();
-          setLogs(prev => [newLog, ...prev].slice(0, 50));
+          computeKpis(newLogs, chartData);
       }
 
       // Update chart (mock movement for live effect if using static daily data)
@@ -102,8 +127,49 @@ export const Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, [paused]);
 
-  const currentThroughput = chartData.length > 0 ? chartData.reduce((acc, cur) => acc + cur.throughput, 0) : 0; // Total Volume
-  const currentLatency = 128; // Placeholder
+  const currentThroughput = kpis.totalVolume;
+  const currentLatency = Math.round(kpis.avgLatency);
+
+  const computeKpis = (logEntries: LogEntry[], series: TimeSeriesPoint[]) => {
+    if ((!logEntries || logEntries.length === 0) && (!series || series.length === 0)) {
+        setKpis({
+            successRate: 0,
+            spend: 0,
+            failed: 0,
+            activeSegments: 0,
+            avgLatency: 0,
+            totalVolume: 0
+        });
+        return;
+    }
+
+    const totals = series.reduce(
+        (acc, point) => {
+            acc.total += point.throughput || 0;
+            acc.errors += point.errors || 0;
+            return acc;
+        },
+        { total: 0, errors: 0 }
+    );
+
+    const delivered = totals.total - totals.errors;
+    const successRate = totals.total > 0 ? (delivered / totals.total) * 100 : 0;
+
+    const spend = logEntries.reduce((sum, log) => sum + (log.cost || 0), 0);
+    const failedCount = logEntries.filter(log => ['FAILED', 'UNDELIVERED'].includes(log.status)).length;
+    const latencySamples = logEntries.filter(log => typeof log.latency === 'number').map(log => log.latency as number);
+    const avgLatency = latencySamples.length > 0 ? latencySamples.reduce((sum, l) => sum + l, 0) / latencySamples.length : 0;
+    const activeSegments = new Set(logEntries.map(log => log.to)).size;
+
+    setKpis({
+        successRate,
+        spend,
+        failed: failedCount,
+        activeSegments,
+        avgLatency,
+        totalVolume: totals.total
+    });
+  };
 
   // Custom Treemap Content
   const CustomTreemapItem = (props: any) => {
@@ -180,9 +246,9 @@ export const Dashboard: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full gap-4 p-4 overflow-y-auto">
+    <div className="flex flex-col min-h-full gap-4 p-4 pb-20">
       {/* 1. LIVE PULSE SECTION */}
-      <section className="relative w-full h-64 glass-panel rounded-xl overflow-hidden shrink-0">
+      <section className="relative w-full glass-panel rounded-xl overflow-hidden min-h-[260px]">
         <div className="absolute top-4 left-4 z-10 flex items-center space-x-6">
            <div>
               <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest mb-1">Total Volume (30d)</div>
@@ -229,36 +295,36 @@ export const Dashboard: React.FC = () => {
       </section>
 
       {/* 2. MAIN GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-96 shrink-0">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         <div className="flex flex-col gap-4">
           <KPICard 
             title="Success Rate" 
-            value="98.4%" 
-            trend="+0.2%" 
+            value={`${kpis.successRate.toFixed(1)}%`} 
+            trend="" 
             trendUp={true} 
             color="text-neon-green"
             icon={<Activity size={16} />}
           />
           <KPICard 
             title="Total Spend (24h)" 
-            value="$42,891.04" 
-            trend="+$12/s" 
+            value={`$${kpis.spend.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} 
+            trend="" 
             trendUp={false} 
             color="text-neon-amber"
             icon={<DollarSign size={16} />}
           />
            <KPICard 
             title="Failed Messages" 
-            value="1,204" 
-            trend="-5%" 
+            value={kpis.failed.toLocaleString()} 
+            trend="" 
             trendUp={true} 
             color="text-neon-red"
             icon={<AlertTriangle size={16} />}
           />
            <KPICard 
             title="Active Segments" 
-            value="89.2M" 
-            trend="Stable" 
+            value={kpis.activeSegments.toLocaleString()} 
+            trend="Active destinations" 
             trendUp={true} 
             color="text-neon-blue"
             icon={<Database size={16} />}
@@ -279,7 +345,7 @@ export const Dashboard: React.FC = () => {
           <div className="flex-1 min-h-0">
              <ResponsiveContainer width="100%" height="100%">
               <Treemap
-                data={ERROR_CLUSTERS}
+                data={errorClusters}
                 dataKey="count"
                 aspectRatio={4 / 3}
                 stroke="#050505"
@@ -305,10 +371,14 @@ const KPICard = ({ title, value, trend, trendUp, color, icon }: any) => (
     </div>
     <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest mb-1">{title}</div>
     <div className="text-xl font-display font-bold text-white mb-1">{value}</div>
-    <div className={`text-xs font-mono flex items-center ${trendUp ? 'text-neon-green' : 'text-neon-amber'}`}>
-      {trendUp ? <ArrowUpRight size={12} className="mr-1"/> : <ArrowDownRight size={12} className="mr-1"/>}
-      {trend}
-    </div>
+    {trend ? (
+      <div className={`text-xs font-mono flex items-center ${trendUp ? 'text-neon-green' : 'text-neon-amber'}`}>
+        {trendUp ? <ArrowUpRight size={12} className="mr-1"/> : <ArrowDownRight size={12} className="mr-1"/>}
+        {trend}
+      </div>
+    ) : (
+      <div className="text-[10px] text-gray-600 font-mono">Live metric</div>
+    )}
   </div>
 );
 

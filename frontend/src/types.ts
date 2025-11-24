@@ -7,10 +7,10 @@ export interface LogEntry {
   timestamp: string; // ISO string
   from: string;
   to: string;
-  carrier: string;
+  carrier?: string;
   status: MessageStatus;
   errorCode?: string;
-  latency: number; // ms
+  latency?: number; // ms
   type: 'SMS' | 'MMS';
   direction: MessageDirection;
   cost: number;

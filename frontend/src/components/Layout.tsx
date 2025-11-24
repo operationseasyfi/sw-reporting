@@ -65,7 +65,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeView, setActiveV
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 bg-[#050505] relative">
+      <main className="flex-1 flex flex-col min-w-0 bg-[#050505] relative overflow-y-auto">
          <div className="absolute inset-0 grid-bg pointer-events-none z-0"></div>
 
          {/* Top Bar */}
@@ -91,7 +91,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeView, setActiveV
          </header>
 
          {/* View Content */}
-         <div className="flex-1 relative overflow-hidden z-10">
+         <div className="flex-1 relative z-10">
             {children}
          </div>
       </main>
