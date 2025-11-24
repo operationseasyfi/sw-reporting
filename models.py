@@ -63,13 +63,54 @@ class SMSLog(Base):
 # We use environment variables for connection string to work with Docker
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://user:password@db:5432/signalwire_db')
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=20,
-    max_overflow=10,
-    pool_pre_ping=True
-)
-Session = sessionmaker(bind=engine)
+# Lazy engine creation - only create when needed
+_engine = None
+_Session = None
+
+def get_engine():
+    """Get or create database engine (lazy initialization)"""
+    global _engine
+    if _engine is None:
+        try:
+            _engine = create_engine(
+                DATABASE_URL,
+                pool_size=10,  # Reduced for Railway
+                max_overflow=5,
+                pool_pre_ping=True,
+                connect_args={'connect_timeout': 10}  # 10 second timeout
+            )
+        except Exception as e:
+            print(f"Error creating database engine: {e}")
+            raise
+    return _engine
+
+def get_session():
+    """Get or create session factory (lazy initialization)"""
+    global _Session
+    if _Session is None:
+        _Session = sessionmaker(bind=get_engine())
+    return _Session
+
+# For backward compatibility
+def Session():
+    return get_session()()
+
+# Create engine and session on first import (but handle errors gracefully)
+try:
+    engine = get_engine()
+    Session = get_session()
+except Exception as e:
+    print(f"Warning: Could not initialize database on import: {e}")
+    print("Database will be initialized on first use.")
+    engine = None
+    Session = None
 
 def init_db():
-    Base.metadata.create_all(engine)
+    """Initialize database tables"""
+    try:
+        eng = get_engine()
+        Base.metadata.create_all(eng)
+        print("Database initialized successfully!")
+    except Exception as e:
+        print(f"Error initializing database: {e}")
+        raise

@@ -1,5 +1,4 @@
 from flask import Flask, render_template, jsonify, request
-from models import Session, SMSLog
 from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert
 import datetime
@@ -7,6 +6,16 @@ import os
 from datetime import timedelta
 
 app = Flask(__name__)
+
+# Import models with error handling
+try:
+    from models import Session, SMSLog, get_engine
+    MODELS_AVAILABLE = True
+except Exception as e:
+    print(f"Warning: Could not import models: {e}")
+    MODELS_AVAILABLE = False
+    Session = None
+    SMSLog = None
 
 # Try to import Celery tasks (optional - works without it)
 try:
@@ -21,6 +30,10 @@ def process_webhook_sync(data):
     Synchronous webhook processor (works without Celery/Redis).
     Handles real-time status updates from SignalWire DLR Webhooks.
     """
+    if not MODELS_AVAILABLE:
+        print("Error: Models not available, cannot process webhook")
+        return
+    
     session = Session()
     try:
         message_sid = data.get('MessageSid') or data.get('SmsSid')
@@ -93,9 +106,33 @@ def process_webhook_sync(data):
     finally:
         session.close()
 
+def check_db():
+    """Check if database is available"""
+    if not MODELS_AVAILABLE:
+        return False, "Database not available"
+    try:
+        from models import get_engine
+        engine = get_engine()
+        # Try a simple connection test
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Railway"""
+    db_ok, db_error = check_db()
+    return jsonify({
+        'status': 'ok' if db_ok else 'error',
+        'database': 'connected' if db_ok else f'error: {db_error}',
+        'models_available': MODELS_AVAILABLE
+    }), 200 if db_ok else 503
 
 @app.route('/webhooks/signalwire', methods=['POST'])
 def signalwire_webhook():
@@ -161,6 +198,9 @@ def get_timeseries_stats():
     """
     Returns aggregated messages per day for charting.
     """
+    if not MODELS_AVAILABLE:
+        return jsonify({}), 503
+    
     session = Session()
     try:
         # Filter for last 30 days
