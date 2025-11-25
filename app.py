@@ -466,47 +466,6 @@ def get_optout_stats():
 
 @app.route('/api/stats/latency')
 def get_latency_stats():
-    if not MODELS_AVAILABLE:
-        return jsonify({}), 503
-
-    session = Session()
-    try:
-        window = get_time_window()
-        rows = session.query(
-            func.extract('epoch', SMSLog.date_sent - SMSLog.date_created)
-        ).filter(
-            SMSLog.date_created >= window,
-            SMSLog.date_sent != None
-        ).all()
-
-        latencies = sorted([row[0] * 1000 for row in rows if row[0] is not None])
-
-        def percentile(values, percent):
-            if not values:
-                return 0
-            k = (len(values) - 1) * percent
-            f = math.floor(k)
-            c = math.ceil(k)
-            if f == c:
-                return round(values[int(k)])
-            d0 = values[f] * (c - k)
-            d1 = values[c] * (k - f)
-            return round(d0 + d1, 2)
-
-        return jsonify({
-            'p50': percentile(latencies, 0.5),
-            'p95': percentile(latencies, 0.95),
-            'p99': percentile(latencies, 0.99),
-            'samples': len(latencies)
-        })
-    except Exception as e:
-        print(f"Error in latency stats: {e}")
-        return jsonify({'p50': 0, 'p95': 0, 'p99': 0, 'samples': 0})
-    finally:
-        session.close()
-
-@app.route('/api/stats/latency')
-def get_latency_stats():
     """
     Returns latency statistics (simplified - calculates from timestamps).
     """
@@ -575,7 +534,8 @@ def get_latency_stats():
             'p95': round(p95, 0),
             'p99': round(p99, 0),
             'avg': round(avg, 0),
-            'distribution': distribution
+            'distribution': distribution,
+            'samples': n
         })
     except Exception as e:
         print(f"Error in latency stats: {e}")
@@ -584,7 +544,8 @@ def get_latency_stats():
             'p95': 0,
             'p99': 0,
             'avg': 0,
-            'distribution': []
+            'distribution': [],
+            'samples': 0
         })
     finally:
         session.close()
