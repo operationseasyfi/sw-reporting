@@ -437,8 +437,11 @@ def get_optout_stats():
     try:
         window = get_time_window()
         base_filter = SMSLog.date_created >= window
+        
+        # Count delivered OUTBOUND messages (what we sent)
         delivered = session.query(func.count(SMSLog.id)).filter(
             base_filter,
+            SMSLog.direction == 'outbound-api',
             SMSLog.status.ilike('delivered') | SMSLog.status.ilike('sent')
         ).scalar() or 0
 
@@ -448,9 +451,11 @@ def get_optout_stats():
         default_count = 0
         extended_count = 0
 
+        # Count INBOUND messages with stop keywords (replies from recipients)
         if default_filter is not None:
             default_count = session.query(func.count(SMSLog.id)).filter(
                 base_filter,
+                SMSLog.direction == 'inbound',  # Only count replies
                 SMSLog.body != None,
                 default_filter
             ).scalar() or 0
@@ -458,6 +463,7 @@ def get_optout_stats():
         if extended_filter is not None:
             extended_count = session.query(func.count(SMSLog.id)).filter(
                 base_filter,
+                SMSLog.direction == 'inbound',  # Only count replies
                 SMSLog.body != None,
                 extended_filter
             ).scalar() or 0
