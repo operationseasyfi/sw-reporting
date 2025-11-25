@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import { LogEntry } from '../types';
 import { Badge } from '../ui/Badge';
-import { Pause, Play, Download } from 'lucide-react';
+import { Pause, Play, Radio } from 'lucide-react';
 
 interface LogStreamProps {
   logs: LogEntry[];
@@ -12,71 +12,126 @@ interface LogStreamProps {
 export const LogStream: React.FC<LogStreamProps> = ({ logs, paused, setPaused }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const formatTime = (timestamp: string) => {
+    try {
+      return new Date(timestamp).toLocaleTimeString('en-US', { 
+        hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' 
+      });
+    } catch {
+      return '—';
+    }
+  };
+
+  const formatPhone = (phone: string) => {
+    if (!phone) return '—';
+    // Show last 4 digits for privacy but keep it readable
+    return phone.length > 4 ? `•••${phone.slice(-4)}` : phone;
+  };
+
   return (
-    <div className="flex flex-col h-full glass-panel rounded-lg overflow-hidden border-t-2 border-t-neon-blue/50">
-      {/* Header Controls */}
-      <div className="flex items-center justify-between p-3 border-b border-white/10 bg-black/20">
-        <div className="flex items-center space-x-2">
-          <div className="h-2 w-2 rounded-full bg-neon-green animate-pulse"></div>
-          <h3 className="text-xs font-bold font-display uppercase tracking-widest text-neon-blue">Live Telemetry Feed</h3>
+    <div className="flex flex-col h-full glass-panel rounded-xl overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-black/30">
+        <div className="flex items-center gap-3">
+          <div className={`h-2.5 w-2.5 rounded-full ${paused ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`} />
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Radio size={14} className="text-cyan-400" />
+            Live Message Feed
+          </h3>
+          <span className="text-xs text-gray-500 font-mono">{logs.length} messages</span>
         </div>
         
-        <div className="flex items-center space-x-3">
-          <button 
-            onClick={() => setPaused(!paused)}
-            className={`p-1.5 rounded hover:bg-white/10 transition-colors ${paused ? 'text-neon-amber' : 'text-gray-400'}`}
-          >
-            {paused ? <Play size={14} /> : <Pause size={14} />}
-          </button>
-          <button className="p-1.5 rounded hover:bg-white/10 text-gray-400">
-            <Download size={14} />
-          </button>
-        </div>
+        <button 
+          onClick={() => setPaused(!paused)}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all
+            ${paused 
+              ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30' 
+              : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'
+            }`}
+        >
+          {paused ? <Play size={12} /> : <Pause size={12} />}
+          {paused ? 'Resume' : 'Pause'}
+        </button>
       </div>
 
-      {/* Log Header */}
-      <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[11px] font-mono text-gray-500 border-b border-white/5 uppercase tracking-wider bg-black/40">
-        <div className="col-span-2">Timestamp</div>
+      {/* Column Headers */}
+      <div className="grid grid-cols-12 gap-3 px-5 py-2.5 text-[11px] font-semibold text-gray-500 
+                      border-b border-white/5 bg-black/20 uppercase tracking-wider">
+        <div className="col-span-1">Time</div>
         <div className="col-span-1">Dir</div>
         <div className="col-span-2">From</div>
         <div className="col-span-2">To</div>
         <div className="col-span-3">Message</div>
         <div className="col-span-1">Latency</div>
-        <div className="col-span-1 text-right">Status</div>
+        <div className="col-span-2 text-right">Status</div>
       </div>
 
-      {/* Log Body */}
-      <div className="flex-1 overflow-y-auto font-mono text-[11px] relative" ref={scrollRef}>
-         {logs.map((log) => (
-           <div 
-             key={log.id} 
-             className="grid grid-cols-12 gap-2 px-4 py-2 border-b border-white/5 hover:bg-white/5 transition-colors items-center animate-in fade-in slide-in-from-top-2 duration-300"
-           >
-             <div className="col-span-2 text-gray-300">
-               {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-             </div>
-             <div className="col-span-1">
-                <span className={`text-[11px] ${log.direction === 'MT' ? 'text-neon-blue' : 'text-neon-purple'}`}>
+      {/* Log Rows */}
+      <div className="flex-1 overflow-y-auto" ref={scrollRef}>
+        {logs.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-gray-600 text-sm">
+            Waiting for messages...
+          </div>
+        ) : (
+          logs.map((log, idx) => (
+            <div 
+              key={log.id || idx}
+              className="grid grid-cols-12 gap-3 px-5 py-2.5 border-b border-white/5 
+                         hover:bg-white/5 transition-colors items-center group"
+            >
+              {/* Time */}
+              <div className="col-span-1 text-[12px] text-gray-400 font-mono">
+                {formatTime(log.timestamp)}
+              </div>
+              
+              {/* Direction */}
+              <div className="col-span-1">
+                <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded
+                  ${log.direction === 'MT' 
+                    ? 'bg-cyan-500/20 text-cyan-400' 
+                    : 'bg-purple-500/20 text-purple-400'
+                  }`}>
                   {log.direction}
                 </span>
-             </div>
-             <div className="col-span-2 text-gray-200">{log.from}</div>
-             <div className="col-span-2 text-gray-200">{log.to}</div>
-             <div className="col-span-3 text-gray-400 truncate">{log.body || '—'}</div>
-             <div className="col-span-1 text-gray-400">{typeof log.latency === 'number' ? `${log.latency}ms` : '—'}</div>
-             <div className="col-span-1 flex justify-end">
-               <Badge variant={
-                   log.status === 'DELIVERED' || log.status === 'SENT' ? 'success' : 
-                   log.status === 'FAILED' ? 'error' : 
-                   log.status === 'UNDELIVERED' ? 'warning' : 'neutral'
-               }>
-                 {log.errorCode ? `ERR ${log.errorCode}` : log.status}
-               </Badge>
-             </div>
-           </div>
-         ))}
+              </div>
+              
+              {/* From */}
+              <div className="col-span-2 text-[12px] text-gray-300 font-mono">
+                {formatPhone(log.from)}
+              </div>
+              
+              {/* To */}
+              <div className="col-span-2 text-[12px] text-gray-300 font-mono">
+                {formatPhone(log.to)}
+              </div>
+              
+              {/* Message Preview */}
+              <div className="col-span-3 text-[12px] text-gray-500 truncate group-hover:text-gray-300 transition-colors">
+                {log.body || '—'}
+              </div>
+              
+              {/* Latency */}
+              <div className="col-span-1 text-[12px] text-gray-500 font-mono">
+                {typeof log.latency === 'number' && log.latency > 0 
+                  ? `${log.latency.toLocaleString()}ms` 
+                  : '—'
+                }
+              </div>
+              
+              {/* Status */}
+              <div className="col-span-2 flex justify-end">
+                <Badge variant={
+                  log.status === 'DELIVERED' || log.status === 'SENT' ? 'success' : 
+                  log.status === 'FAILED' ? 'error' : 
+                  log.status === 'UNDELIVERED' ? 'warning' : 'neutral'
+                }>
+                  {log.errorCode ? `E${log.errorCode}` : log.status}
+                </Badge>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
 };
-

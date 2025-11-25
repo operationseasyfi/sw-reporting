@@ -1,8 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Treemap } from 'recharts';
-import { Activity, Zap, AlertTriangle, DollarSign, Database, RefreshCw, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Activity, Zap, AlertTriangle, DollarSign, Users, RefreshCw, TrendingUp, TrendingDown, Shield, MessageSquare } from 'lucide-react';
 import { LogStream } from './LogStream';
 import { LogEntry, TimeSeriesPoint, ErrorCluster } from '../types';
+
+// ============================================================================
+// TYPES
+// ============================================================================
 
 interface OverviewStats {
   totalVolume: number;
@@ -17,9 +21,11 @@ interface OverviewStats {
 interface OptOutStats {
   delivered: number;
   defaultCount: number;
-  advancedCount: number;
   defaultRate: number;
-  advancedRate: number;
+  defaultKeywords: string[];
+  customCount: number;
+  customRate: number;
+  customKeywords: string[];
 }
 
 interface LatencyStats {
@@ -29,88 +35,70 @@ interface LatencyStats {
   samples: number;
 }
 
-// Helper to fetch real logs
-async function fetchLogs(): Promise<LogEntry[]> {
-    try {
-        const res = await fetch('/api/logs_dt?draw=1&start=0&length=50');
-        if (!res.ok) return [];
-        const data = await res.json();
-        // Map backend DB model to UI LogEntry
-        return data.data.map((row: any) => {
-            const created = row.date_created ? new Date(row.date_created) : null;
-            const sent = row.date_sent ? new Date(row.date_sent) : null;
-            const latency = created && sent ? Math.max(sent.getTime() - created.getTime(), 0) : undefined;
-            return {
-                id: row.id,
-                timestamp: row.date_created,
-                from: row.from_number,
-                to: row.to_number,
-            carrier: row.carrier || '—',
-                status: (row.status || 'UNKNOWN').toUpperCase(),
-                errorCode: row.error_code ? String(row.error_code) : undefined,
-                latency,
-                type: row.body && row.body.length > 160 ? 'MMS' : 'SMS',
-                direction: row.direction === 'inbound' ? 'MO' : 'MT',
-            cost: row.price || 0,
-            body: row.body
-            } as LogEntry;
-        });
-    } catch (e) {
-        console.error("Failed to fetch logs", e);
-        return [];
-    }
-}
+// ============================================================================
+// DATA FETCHING (Optimized with error handling)
+// ============================================================================
 
-async function fetchTimeSeries(): Promise<TimeSeriesPoint[]> {
-    try {
-        const res = await fetch('/api/stats/timeseries');
-        if(!res.ok) return [];
-        const data = await res.json();
-        
-        const sortedKeys = Object.keys(data).sort();
-        return sortedKeys.map(dateStr => {
-            const day = data[dateStr];
-            return {
-                time: dateStr,
-                throughput: day.total,
-                latency: day.latencyAvg || 0,
-                errors: day.failed
-            };
-        });
-    } catch(e) {
-        return [];
-    }
-}
+const fetchJSON = async <T,>(url: string, fallback: T): Promise<T> => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (e) {
+    console.warn(`Failed to fetch ${url}:`, e);
+    return fallback;
+  }
+};
 
-async function fetchErrorClusters(): Promise<ErrorCluster[]> {
-    try {
-        const res = await fetch('/api/stats/errors');
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data;
-    } catch (e) {
-        console.error("Failed to fetch error clusters", e);
-        return [];
-    }
-}
+const fetchLogs = (): Promise<LogEntry[]> => 
+  fetchJSON<any>('/api/logs_dt?draw=1&start=0&length=30', { data: [] })
+    .then(data => data.data?.map((row: any) => ({
+      id: row.id,
+      timestamp: row.date_created,
+      from: row.from_number,
+      to: row.to_number,
+      carrier: '—',
+      status: (row.status || 'UNKNOWN').toUpperCase(),
+      errorCode: row.error_code ? String(row.error_code) : undefined,
+      latency: row.date_created && row.date_sent 
+        ? Math.max(new Date(row.date_sent).getTime() - new Date(row.date_created).getTime(), 0) 
+        : undefined,
+      type: row.body?.length > 160 ? 'MMS' : 'SMS',
+      direction: row.direction === 'inbound' ? 'MO' : 'MT',
+      cost: row.price || 0,
+      body: row.body
+    })) || []);
 
-async function fetchOverview(): Promise<OverviewStats> {
-  const res = await fetch('/api/stats/overview');
-  if (!res.ok) return { totalVolume: 0, delivered: 0, failed: 0, successRate: 0, spend: 0, activeSegments: 0, avgLatency: 0 };
-  return res.json();
-}
+const fetchTimeSeries = (): Promise<TimeSeriesPoint[]> =>
+  fetchJSON<Record<string, any>>('/api/stats/timeseries', {})
+    .then(data => Object.keys(data).sort().map(dateStr => ({
+      time: dateStr,
+      throughput: data[dateStr].total || 0,
+      latency: data[dateStr].latencyAvg || 0,
+      errors: data[dateStr].failed || 0
+    })));
 
-async function fetchOptOuts(): Promise<OptOutStats> {
-  const res = await fetch('/api/stats/optouts');
-  if (!res.ok) return { delivered: 0, defaultCount: 0, advancedCount: 0, defaultRate: 0, advancedRate: 0 };
-  return res.json();
-}
+const fetchErrorClusters = (): Promise<ErrorCluster[]> =>
+  fetchJSON<ErrorCluster[]>('/api/stats/errors', []);
 
-async function fetchLatencyStats(): Promise<LatencyStats> {
-  const res = await fetch('/api/stats/latency');
-  if (!res.ok) return { p50: 0, p95: 0, p99: 0, samples: 0 };
-  return res.json();
-}
+const fetchOverview = (): Promise<OverviewStats> =>
+  fetchJSON('/api/stats/overview', {
+    totalVolume: 0, delivered: 0, failed: 0, successRate: 0, 
+    spend: 0, activeSegments: 0, avgLatency: 0
+  });
+
+const fetchOptOuts = (): Promise<OptOutStats> =>
+  fetchJSON('/api/stats/optouts', {
+    delivered: 0, defaultCount: 0, defaultRate: 0, defaultKeywords: [],
+    customCount: 0, customRate: 0, customKeywords: []
+  });
+
+const fetchLatencyStats = (): Promise<LatencyStats> =>
+  fetchJSON('/api/stats/latency', { p50: 0, p95: 0, p99: 0, samples: 0 });
+
+// ============================================================================
+// MAIN DASHBOARD COMPONENT
+// ============================================================================
 
 export const Dashboard: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -119,354 +107,317 @@ export const Dashboard: React.FC = () => {
   const [hoveredCluster, setHoveredCluster] = useState<ErrorCluster | null>(null);
   const [errorClusters, setErrorClusters] = useState<ErrorCluster[]>([]);
   const [overview, setOverview] = useState<OverviewStats>({
-    totalVolume: 0,
-    delivered: 0,
-    failed: 0,
-    successRate: 0,
-    spend: 0,
-    activeSegments: 0,
-    avgLatency: 0
+    totalVolume: 0, delivered: 0, failed: 0, successRate: 0,
+    spend: 0, activeSegments: 0, avgLatency: 0
   });
   const [optouts, setOptouts] = useState<OptOutStats>({
-    delivered: 0,
-    defaultCount: 0,
-    advancedCount: 0,
-    defaultRate: 0,
-    advancedRate: 0
+    delivered: 0, defaultCount: 0, defaultRate: 0, defaultKeywords: [],
+    customCount: 0, customRate: 0, customKeywords: []
   });
   const [latencyStats, setLatencyStats] = useState<LatencyStats>({ p50: 0, p95: 0, p99: 0, samples: 0 });
-  const [snapshotLoading, setSnapshotLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
-  const loadSnapshot = async () => {
-    setSnapshotLoading(true);
-    try {
-      const [series, clusters, overviewData, optoutData, latencyData] = await Promise.all([
-        fetchTimeSeries(),
-        fetchErrorClusters(),
-        fetchOverview(),
-        fetchOptOuts(),
-        fetchLatencyStats()
-      ]);
-      setChartData(series);
-      setErrorClusters(clusters);
-      setOverview(overviewData);
-      setOptouts(optoutData);
-      setLatencyStats(latencyData);
-    } finally {
-      setSnapshotLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchLogs().then(setLogs);
-    loadSnapshot();
-    const interval = setInterval(loadSnapshot, 30000);
-    return () => clearInterval(interval);
+  const loadAllData = useCallback(async () => {
+    setLoading(true);
+    const [series, clusters, overviewData, optoutData, latencyData, logsData] = await Promise.all([
+      fetchTimeSeries(),
+      fetchErrorClusters(),
+      fetchOverview(),
+      fetchOptOuts(),
+      fetchLatencyStats(),
+      fetchLogs()
+    ]);
+    setChartData(series);
+    setErrorClusters(clusters);
+    setOverview(overviewData);
+    setOptouts(optoutData);
+    setLatencyStats(latencyData);
+    setLogs(logsData);
+    setLastUpdate(new Date());
+    setLoading(false);
   }, []);
 
+  // Initial load + periodic refresh
+  useEffect(() => {
+    loadAllData();
+    const interval = setInterval(loadAllData, 30000);
+    return () => clearInterval(interval);
+  }, [loadAllData]);
+
+  // Faster log refresh when not paused
   useEffect(() => {
     if (paused) return;
     const interval = setInterval(async () => {
       const newLogs = await fetchLogs();
-      if (newLogs.length > 0) {
-        setLogs(newLogs);
-      }
-    }, 5000);
+      if (newLogs.length > 0) setLogs(newLogs);
+    }, 8000);
     return () => clearInterval(interval);
   }, [paused]);
 
-  const currentThroughput = overview.totalVolume;
-  const currentLatency = Math.round(overview.avgLatency);
-
-  // Custom Treemap Content
-  const CustomTreemapItem = (props: any) => {
+  // Treemap custom renderer
+  const TreemapCell = (props: any) => {
     const { x, y, width, height, payload, name } = props;
-    
-    let fill = '#333';
-    let borderColor = 'rgba(255,255,255,0.1)';
-    let textColor = '#aaa';
-    
-    if (payload?.severity === 'critical') {
-      fill = 'rgba(255, 0, 60, 0.2)';
-      borderColor = '#ff003c';
-      textColor = '#ff003c';
-    } else if (payload?.severity === 'high') {
-      fill = 'rgba(255, 174, 0, 0.15)';
-      borderColor = '#ffae00';
-      textColor = '#ffae00';
-    } else if (payload?.severity === 'medium') {
-      fill = 'rgba(0, 240, 255, 0.1)';
-      borderColor = '#00f0ff';
-      textColor = '#00f0ff';
-    } else {
-        fill = 'rgba(255, 255, 255, 0.05)';
-        borderColor = 'rgba(255, 255, 255, 0.2)';
-    }
+    const colors: Record<string, { bg: string; border: string; text: string }> = {
+      critical: { bg: 'rgba(255,0,60,0.25)', border: '#ff003c', text: '#ff003c' },
+      high: { bg: 'rgba(255,174,0,0.2)', border: '#ffae00', text: '#ffae00' },
+      medium: { bg: 'rgba(0,240,255,0.15)', border: '#00f0ff', text: '#00f0ff' },
+      low: { bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.3)', text: '#888' }
+    };
+    const c = colors[payload?.severity] || colors.low;
 
     return (
       <g>
         <rect
-          x={x}
-          y={y}
-          width={width}
-          height={height}
-          style={{
-            fill: fill,
-            stroke: borderColor,
-            strokeWidth: 1,
-            strokeOpacity: 1,
-            transition: 'all 0.3s ease',
-          }}
-          className="hover:brightness-125 cursor-pointer"
-          onMouseEnter={() => payload && setHoveredCluster(payload)}
+          x={x} y={y} width={width} height={height}
+          fill={c.bg} stroke={c.border} strokeWidth={1.5}
+          className="cursor-pointer transition-all hover:brightness-125"
+          onMouseEnter={() => setHoveredCluster(payload)}
           onMouseLeave={() => setHoveredCluster(null)}
         />
-        {width > 50 && height > 30 && (
-          <text
-            x={x + width / 2}
-            y={y + height / 2}
-            textAnchor="middle"
-            fill={textColor}
-            fontSize={12}
-            fontWeight="bold"
-            className="font-mono"
-            dy={-6}
-          >
-            {name}
-          </text>
-        )}
-         {width > 50 && height > 30 && payload?.count && (
-          <text
-            x={x + width / 2}
-            y={y + height / 2}
-            textAnchor="middle"
-            fill="rgba(255,255,255,0.6)"
-            fontSize={10}
-            className="font-mono"
-            dy={10}
-          >
-            {payload.count}
-          </text>
+        {width > 45 && height > 35 && (
+          <>
+            <text x={x + width/2} y={y + height/2 - 6} textAnchor="middle" 
+                  fill={c.text} fontSize={13} fontWeight="bold" className="font-mono">
+              {name}
+            </text>
+            <text x={x + width/2} y={y + height/2 + 10} textAnchor="middle" 
+                  fill="rgba(255,255,255,0.5)" fontSize={10} className="font-mono">
+              {payload?.count?.toLocaleString()}
+            </text>
+          </>
         )}
       </g>
     );
   };
 
   return (
-    <div className="flex flex-col min-h-full gap-4 p-4 pb-20">
-      {/* 1. LIVE PULSE SECTION */}
-      <section className="relative w-full glass-panel rounded-xl overflow-hidden min-h-[260px]">
-        <div className="absolute top-4 left-4 z-10 flex items-center space-x-6">
-           <div>
-              <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest mb-1">Total Volume (30d)</div>
-              <div className="text-2xl font-display font-bold text-white flex items-baseline">
-                {currentThroughput.toLocaleString()} 
-                <span className="text-xs text-neon-blue ml-2 font-mono">msgs</span>
-              </div>
-           </div>
-           <div>
-              <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest mb-1">Avg Latency</div>
-              <div className="text-2xl font-display font-bold text-white flex items-baseline">
-                {currentLatency}
-                <span className="text-xs text-neon-amber ml-2 font-mono">ms</span>
-              </div>
-           </div>
+    <div className="flex flex-col gap-5 p-5 pb-24 min-h-full">
+      
+      {/* HEADER BAR */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-white tracking-tight">SignalWire Analytics</h1>
+          <p className="text-xs text-gray-500 font-mono">
+            {lastUpdate ? `Last updated: ${lastUpdate.toLocaleTimeString()}` : 'Loading...'}
+          </p>
         </div>
         <button
-          onClick={loadSnapshot}
-          disabled={snapshotLoading}
-          className="absolute top-4 right-4 flex items-center gap-2 text-[11px] font-mono text-gray-400 hover:text-white disabled:opacity-50"
+          onClick={loadAllData}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 
+                     text-sm text-gray-300 hover:text-white transition-all disabled:opacity-50"
         >
-          <RefreshCw size={14} className={snapshotLoading ? 'animate-spin' : ''} />
-          {snapshotLoading ? 'Refreshing...' : 'Refresh'}
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          {loading ? 'Syncing...' : 'Refresh'}
         </button>
-        
-        <div className="absolute inset-0 grid-bg opacity-30"></div>
+      </div>
+
+      {/* VOLUME CHART */}
+      <section className="glass-panel rounded-2xl overflow-hidden h-[220px] relative">
+        <div className="absolute top-4 left-5 z-10 flex gap-8">
+          <div>
+            <div className="text-[10px] uppercase text-gray-500 tracking-widest mb-1">24h Volume</div>
+            <div className="text-3xl font-bold text-white">
+              {overview.totalVolume.toLocaleString()}
+              <span className="text-sm text-neon-blue ml-2 font-normal">msgs</span>
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase text-gray-500 tracking-widest mb-1">Avg Latency</div>
+            <div className="text-3xl font-bold text-white">
+              {Math.round(overview.avgLatency)}
+              <span className="text-sm text-neon-amber ml-2 font-normal">ms</span>
+            </div>
+          </div>
+        </div>
+        <div className="absolute inset-0 opacity-20 grid-bg"></div>
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData}>
+          <AreaChart data={chartData} margin={{ top: 80, right: 0, bottom: 0, left: 0 }}>
             <defs>
-              <linearGradient id="colorThroughput" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#00f0ff" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#00f0ff" stopOpacity={0}/>
+              <linearGradient id="throughputGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#00f0ff" stopOpacity={0.4}/>
+                <stop offset="100%" stopColor="#00f0ff" stopOpacity={0}/>
               </linearGradient>
             </defs>
-            <XAxis hide />
+            <XAxis dataKey="time" hide />
             <YAxis hide domain={['auto', 'auto']} />
             <Tooltip 
-              contentStyle={{ backgroundColor: '#050505', borderColor: '#333', color: '#fff' }}
+              contentStyle={{ background: '#0a0a0a', border: '1px solid #333', borderRadius: 8 }}
+              labelStyle={{ color: '#888' }}
               itemStyle={{ color: '#00f0ff' }}
             />
-            <Area 
-              type="monotone" 
-              dataKey="throughput" 
-              stroke="#00f0ff" 
-              strokeWidth={2}
-              fillOpacity={1} 
-              fill="url(#colorThroughput)" 
-              isAnimationActive={false} 
-            />
+            <Area type="monotone" dataKey="throughput" stroke="#00f0ff" strokeWidth={2}
+                  fill="url(#throughputGrad)" isAnimationActive={false} />
           </AreaChart>
         </ResponsiveContainer>
       </section>
 
-      {/* 2. MAIN GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        <div className="flex flex-col gap-4">
-          <KPICard 
-            title="Success Rate" 
-            value={`${overview.successRate.toFixed(1)}%`} 
-            trend="" 
-            trendUp={true} 
-            color="text-neon-green"
-            icon={<Activity size={16} />}
-          />
-          <KPICard 
-            title="Total Spend (24h)" 
-            value={`$${overview.spend.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} 
-            trend="" 
-            trendUp={false} 
-            color="text-neon-amber"
-            icon={<DollarSign size={16} />}
-          />
-           <KPICard 
-            title="Failed Messages" 
-            value={overview.failed.toLocaleString()} 
-            trend="" 
-            trendUp={true} 
-            color="text-neon-red"
-            icon={<AlertTriangle size={16} />}
-          />
-           <KPICard 
-            title="Active Segments" 
-            value={overview.activeSegments.toLocaleString()} 
-            trend="Active destinations" 
-            trendUp={true} 
-            color="text-neon-blue"
-            icon={<Database size={16} />}
-          />
-        </div>
-
-        <div className="lg:col-span-3 glass-panel rounded-xl p-4 flex flex-col relative overflow-hidden">
-          <div className="flex justify-between items-center mb-2">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-neon-red flex items-center gap-2">
-              <Zap size={16} /> Kill Zone Analysis (Error Codes)
-            </h3>
-            {hoveredCluster && (
-              <div className="text-xs font-mono text-white animate-pulse">
-                {hoveredCluster.description} ({hoveredCluster.count} events)
-              </div>
-            )}
-          </div>
-          <div className="flex-1 min-h-0">
-            {errorClusters.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <Treemap
-                  data={errorClusters}
-                  dataKey="count"
-                  aspectRatio={4 / 3}
-                  stroke="#050505"
-                  content={<CustomTreemapItem />}
-                />
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex items-center justify-center h-full text-sm text-gray-500 font-mono">
-                No error activity detected in the last 24 hours.
-              </div>
-            )}
-          </div>
-        </div>
+      {/* KPI ROW */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KPICard icon={<Activity />} label="Success Rate" 
+                 value={`${overview.successRate.toFixed(1)}%`} 
+                 color="green" trend={overview.successRate > 80 ? 'up' : 'down'} />
+        <KPICard icon={<DollarSign />} label="Spend (24h)" 
+                 value={`$${overview.spend.toFixed(2)}`} color="amber" />
+        <KPICard icon={<AlertTriangle />} label="Failed" 
+                 value={overview.failed.toLocaleString()} color="red" />
+        <KPICard icon={<Users />} label="Recipients" 
+                 value={overview.activeSegments.toLocaleString()} color="blue" />
       </div>
 
-      {/* 3. Opt-out + Latency */}
+      {/* ERROR TREEMAP */}
+      <section className="glass-panel rounded-2xl p-5 min-h-[240px]">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold uppercase tracking-widest text-neon-red flex items-center gap-2">
+            <Zap size={16} /> Error Code Analysis
+          </h3>
+          {hoveredCluster && (
+            <span className="text-xs text-white/70 font-mono animate-pulse">
+              Error {hoveredCluster.code}: {hoveredCluster.count?.toLocaleString()} occurrences
+            </span>
+          )}
+        </div>
+        {errorClusters.length > 0 ? (
+          <div className="h-[180px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <Treemap data={errorClusters} dataKey="count" stroke="#0a0a0a" content={<TreemapCell />} />
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <div className="h-[180px] flex items-center justify-center text-gray-600 text-sm">
+            No errors detected — looking good! ✓
+          </div>
+        )}
+      </section>
+
+      {/* OPT-OUT METERS (TWO SEPARATE) + LATENCY */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <OptOutCard
-          title="Default Opt-Outs"
-          subtitle="STOP / UNSUBSCRIBE"
+        <OptOutMeter
+          title="Standard Opt-Outs"
+          subtitle="STOP • UNSUBSCRIBE"
+          icon={<Shield size={18} />}
           count={optouts.defaultCount}
-          delivered={optouts.delivered}
           rate={optouts.defaultRate}
-          variant="default"
-        />
-        <OptOutCard
-          title="Advanced Opt-Outs"
-          subtitle="Expanded keyword watch"
-          count={optouts.advancedCount}
           delivered={optouts.delivered}
-          rate={optouts.advancedRate}
-          variant="advanced"
+          keywords={optouts.defaultKeywords}
+          color="blue"
         />
-        <LatencyPanel stats={latencyStats} />
+        <OptOutMeter
+          title="Custom Opt-Outs"
+          subtitle="Extended keyword watch"
+          icon={<MessageSquare size={18} />}
+          count={optouts.customCount}
+          rate={optouts.customRate}
+          delivered={optouts.delivered}
+          keywords={optouts.customKeywords}
+          color="amber"
+        />
+        <LatencyCard stats={latencyStats} />
       </div>
 
-      {/* 3. LOG STREAM */}
-      <div className="flex-1 min-h-[300px]">
+      {/* LIVE FEED */}
+      <section className="flex-1 min-h-[350px]">
         <LogStream logs={logs} paused={paused} setPaused={setPaused} />
-      </div>
+      </section>
     </div>
   );
 };
 
-const KPICard = ({ title, value, trend, trendUp, color, icon }: any) => (
-  <div className="flex-1 glass-panel p-4 rounded-xl flex flex-col justify-center relative overflow-hidden group hover:border-white/20 transition-all">
-    <div className={`absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-40 transition-opacity ${color}`}>
-      {icon}
-    </div>
-    <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest mb-1">{title}</div>
-    <div className="text-xl font-display font-bold text-white mb-1">{value}</div>
-    {trend ? (
-      <div className={`text-xs font-mono flex items-center ${trendUp ? 'text-neon-green' : 'text-neon-amber'}`}>
-        {trendUp ? <ArrowUpRight size={12} className="mr-1"/> : <ArrowDownRight size={12} className="mr-1"/>}
-        {trend}
-      </div>
-    ) : (
-      <div className="text-[10px] text-gray-600 font-mono">Live metric</div>
-    )}
-  </div>
-);
+// ============================================================================
+// SUB-COMPONENTS
+// ============================================================================
 
-const OptOutCard = ({ title, subtitle, count, delivered, rate, variant }:
-  { title: string; subtitle: string; count: number; delivered: number; rate: number; variant: 'default' | 'advanced'; }) => {
-  const hasData = delivered > 0;
+const KPICard = ({ icon, label, value, color, trend }: {
+  icon: React.ReactNode; label: string; value: string; color: string; trend?: 'up' | 'down';
+}) => {
+  const colors: Record<string, string> = {
+    green: 'text-emerald-400', amber: 'text-amber-400', 
+    red: 'text-rose-400', blue: 'text-cyan-400'
+  };
   return (
-  <div className="glass-panel p-4 rounded-xl flex flex-col gap-2">
-    <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest">{title}</div>
-    <div className="text-sm text-gray-400">{subtitle}</div>
-    <div className="flex items-end justify-between">
-      <div>
-        <div className="text-3xl font-display text-white">{hasData ? `${rate.toFixed(2)}%` : '—'}</div>
-        <div className="text-[11px] text-gray-500 font-mono">
-          {hasData ? `${count.toLocaleString()} opt-outs` : 'Awaiting data'}
-        </div>
+    <div className="glass-panel rounded-xl p-4 hover:border-white/20 transition-all group">
+      <div className={`${colors[color]} opacity-40 group-hover:opacity-70 transition-opacity mb-2`}>
+        {icon}
       </div>
-      <div className={`text-[10px] font-mono px-2 py-1 rounded ${variant === 'default' ? 'bg-neon-blue/10 text-neon-blue' : 'bg-neon-amber/10 text-neon-amber'}`}>
-        {delivered.toLocaleString()} delivered
+      <div className="text-[10px] uppercase text-gray-500 tracking-widest mb-1">{label}</div>
+      <div className="text-xl font-bold text-white flex items-center gap-2">
+        {value}
+        {trend && (
+          trend === 'up' 
+            ? <TrendingUp size={14} className="text-emerald-400" />
+            : <TrendingDown size={14} className="text-rose-400" />
+        )}
       </div>
     </div>
-  </div>
   );
 };
 
-const LatencyPanel = ({ stats }: { stats: LatencyStats }) => (
-  <div className="glass-panel p-4 rounded-xl flex flex-col">
-    <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest mb-2">Latency Breakdown (ms)</div>
-    {stats.samples > 0 ? (
-      <div className="grid grid-cols-3 gap-3 text-center">
+const OptOutMeter = ({ title, subtitle, icon, count, rate, delivered, keywords, color }: {
+  title: string; subtitle: string; icon: React.ReactNode;
+  count: number; rate: number; delivered: number; keywords: string[]; color: 'blue' | 'amber';
+}) => {
+  const accent = color === 'blue' ? 'text-cyan-400 bg-cyan-500/10' : 'text-amber-400 bg-amber-500/10';
+  const barColor = color === 'blue' ? 'bg-cyan-500' : 'bg-amber-500';
+  
+  return (
+    <div className="glass-panel rounded-xl p-5 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <div className={`p-2 rounded-lg ${accent}`}>{icon}</div>
         <div>
-          <div className="text-2xl font-display text-neon-green">{stats.p50}</div>
-          <div className="text-[10px] text-gray-500 font-mono uppercase">P50</div>
-        </div>
-        <div>
-          <div className="text-2xl font-display text-neon-amber">{stats.p95}</div>
-          <div className="text-[10px] text-gray-500 font-mono uppercase">P95</div>
-        </div>
-        <div>
-          <div className="text-2xl font-display text-neon-red">{stats.p99}</div>
-          <div className="text-[10px] text-gray-500 font-mono uppercase">P99</div>
+          <div className="text-sm font-semibold text-white">{title}</div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider">{subtitle}</div>
         </div>
       </div>
-    ) : (
-      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">No latency samples yet</div>
-    )}
+      
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-3xl font-bold text-white">
+            {rate > 0 ? `${rate.toFixed(2)}%` : '—'}
+          </div>
+          <div className="text-xs text-gray-500">
+            {count.toLocaleString()} of {delivered.toLocaleString()} delivered
+          </div>
+        </div>
+      </div>
+      
+      {/* Progress bar */}
+      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(rate * 10, 100)}%` }} />
+      </div>
+      
+      {/* Keywords preview */}
+      {keywords.length > 0 && (
+        <div className="text-[10px] text-gray-600 truncate">
+          Tracking: {keywords.slice(0, 4).join(', ')}{keywords.length > 4 ? '...' : ''}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const LatencyCard = ({ stats }: { stats: LatencyStats }) => (
+  <div className="glass-panel rounded-xl p-5 flex flex-col gap-3">
+    <div className="text-sm font-semibold text-white">Latency Distribution</div>
+    <div className="text-[10px] text-gray-500 uppercase tracking-wider">
+      {stats.samples.toLocaleString()} samples (24h)
+    </div>
+    
+    <div className="grid grid-cols-3 gap-3 mt-2">
+      <div className="text-center">
+        <div className="text-2xl font-bold text-emerald-400">{Math.round(stats.p50)}</div>
+        <div className="text-[10px] text-gray-500">P50 (ms)</div>
+      </div>
+      <div className="text-center">
+        <div className="text-2xl font-bold text-amber-400">{Math.round(stats.p95)}</div>
+        <div className="text-[10px] text-gray-500">P95 (ms)</div>
+      </div>
+      <div className="text-center">
+        <div className="text-2xl font-bold text-rose-400">{Math.round(stats.p99)}</div>
+        <div className="text-[10px] text-gray-500">P99 (ms)</div>
+      </div>
+    </div>
   </div>
 );
 
+export default Dashboard;

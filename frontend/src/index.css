@@ -2,58 +2,116 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @layer base {
+  * {
+    box-sizing: border-box;
+  }
+  
+  html {
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
   body {
-    @apply bg-[#050505] text-[#e5e5e5] overflow-y-auto selection:bg-[#00f0ff] selection:text-black text-[13px] leading-relaxed;
+    @apply bg-[#0a0a0a] text-gray-200 overflow-y-auto;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.5;
   }
 
-  /* Custom Scrollbar */
+  /* Better Scrollbar */
   ::-webkit-scrollbar {
-    @apply w-1.5 h-1.5;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
-    @apply bg-[#0a0a0a]; 
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-[#333] rounded-full hover:bg-[#555]; 
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
+  
+  /* Selection */
+  ::selection {
+    background: rgba(0, 240, 255, 0.3);
+    color: white;
   }
 }
 
 @layer components {
+  /* Glass Panel - Main container style */
   .glass-panel {
-    @apply bg-[#0a0a0a]/60 backdrop-blur-xl border border-white/[0.08];
+    background: rgba(15, 15, 15, 0.8);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 
+      0 4px 6px -1px rgba(0, 0, 0, 0.3),
+      0 2px 4px -2px rgba(0, 0, 0, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+  
+  .glass-panel:hover {
+    border-color: rgba(255, 255, 255, 0.1);
   }
 
-  .neon-text-glow {
-    text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
-  }
-
+  /* Grid Background Pattern */
   .grid-bg {
     background-image: 
-      linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-    background-size: 40px 40px;
-    mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
+      linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
   }
   
-  .text-neon-blue { color: #00f0ff; }
-  .text-neon-green { color: #0aff0a; }
-  .text-neon-red { color: #ff003c; }
-  .text-neon-amber { color: #ffae00; }
-  .text-neon-purple { color: #bc13fe; }
+  /* Neon Colors */
+  .text-neon-blue { color: #00d4ff; }
+  .text-neon-green { color: #10b981; }
+  .text-neon-red { color: #ef4444; }
+  .text-neon-amber { color: #f59e0b; }
+  .text-neon-purple { color: #a855f7; }
 
-  .bg-neon-blue { background-color: #00f0ff; }
-  .bg-neon-green { background-color: #0aff0a; }
-  .bg-neon-red { background-color: #ff003c; }
-  .bg-neon-amber { background-color: #ffae00; }
-  .bg-neon-purple { background-color: #bc13fe; }
+  .bg-neon-blue { background-color: #00d4ff; }
+  .bg-neon-green { background-color: #10b981; }
+  .bg-neon-red { background-color: #ef4444; }
+  .bg-neon-amber { background-color: #f59e0b; }
+  .bg-neon-purple { background-color: #a855f7; }
 
-  .border-neon-blue { border-color: #00f0ff; }
-  .border-neon-green { border-color: #0aff0a; }
-  .border-neon-red { border-color: #ff003c; }
-  .border-neon-amber { border-color: #ffae00; }
-  .border-neon-purple { border-color: #bc13fe; }
+  .border-neon-blue { border-color: #00d4ff; }
+  .border-neon-green { border-color: #10b981; }
+  .border-neon-red { border-color: #ef4444; }
+  .border-neon-amber { border-color: #f59e0b; }
+  .border-neon-purple { border-color: #a855f7; }
   
-  .font-display { font-family: 'Space Grotesk', sans-serif; }
-  .font-mono { font-family: 'JetBrains Mono', monospace; }
+  /* Typography */
+  .font-display { 
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+  }
+  
+  .font-mono { 
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.9em;
+  }
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: fade-in 0.2s ease-out;
 }
