@@ -215,9 +215,10 @@ export const Dashboard: React.FC = () => {
     setSyncResult(null);
     
     try {
-      setSyncProgress('Fetching messages from SignalWire API...');
+      setSyncProgress(`Fetching messages from last ${syncHours} hour(s)...`);
       
-      const res = await fetch(`/api/sync/trigger?hours=${syncHours}&limit=1000`);
+      // No limit - fetch ALL messages in the time range
+      const res = await fetch(`/api/sync/trigger?hours=${syncHours}`);
       const data = await res.json();
       
       if (data.error) {
@@ -225,16 +226,19 @@ export const Dashboard: React.FC = () => {
       } else {
         setSyncResult({ 
           success: true, 
-          message: `Successfully fetched ${data.fetched} messages, saved ${data.saved} new messages to database.`
+          message: `Fetched ${data.fetched.toLocaleString()} messages from ${data.pages} pages. Saved ${data.saved.toLocaleString()} new messages (${data.skipped.toLocaleString()} already existed).`
         });
-        // Refresh the dashboard data
-        await loadData(startDate, endDate);
-        // Update db stats
-        const newDbStats = await fetchDbStats();
-        setDbStats(newDbStats);
+        
+        // Force refresh all dashboard data
+        setLoading(true);
+        await Promise.all([
+          loadData(startDate, endDate),
+          fetchDbStats().then(setDbStats)
+        ]);
+        setLoading(false);
       }
     } catch (error) {
-      setSyncResult({ success: false, message: 'Failed to connect to sync API' });
+      setSyncResult({ success: false, message: `Failed to sync: ${error instanceof Error ? error.message : 'Unknown error'}` });
     } finally {
       setSyncing(false);
       setSyncProgress('');
@@ -364,12 +368,6 @@ export const Dashboard: React.FC = () => {
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setSyncModalOpen(true)}
-            className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
-          >
-            Load more data <ChevronRight size={16} />
-          </button>
         </div>
       )}
 
@@ -679,11 +677,11 @@ export const Dashboard: React.FC = () => {
 
               {/* Info */}
               <div className="bg-slate-50 rounded-xl p-4 text-sm text-slate-600">
-                <p><strong>Note:</strong> This will fetch up to 1,000 messages from SignalWire. 
-                For larger syncs, use the command line:</p>
-                <code className="block mt-2 bg-slate-200 px-3 py-2 rounded text-xs font-mono">
-                  python sync_logs.py --hours {syncHours}
-                </code>
+                <p><strong>Note:</strong> This will fetch <strong>ALL</strong> messages from SignalWire for the selected time period. 
+                The sync will continue until all messages are retrieved. This may take several minutes for large volumes.</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  For command-line syncing: <code className="bg-slate-200 px-2 py-1 rounded">python sync_logs.py --hours {syncHours}</code>
+                </p>
               </div>
             </div>
 

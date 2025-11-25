@@ -598,9 +598,8 @@ def trigger_sync():
     base_url = f"https://{space}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Messages.json"
     
     hours = int(request.args.get('hours', 1))
-    max_messages = min(int(request.args.get('limit', 1000)), 2000)
     
-    # Calculate date range
+    # Calculate date range - use proper datetime format
     start_time = datetime.datetime.utcnow() - timedelta(hours=hours)
     
     try:
@@ -608,15 +607,18 @@ def trigger_sync():
         all_messages = []
         next_page_uri = None
         page_count = 0
-        max_pages = 10  # Safety limit
+        # No artificial limit - fetch ALL messages in the time range
+        # Set very high safety limit (500k messages = 5000 pages)
+        max_pages = 5000
         
-        # Initial request
+        # Initial request - SignalWire API uses DateSent> with YYYY-MM-DD format
+        # Note: This filters by date, not exact time, so we may get messages slightly before the exact hour mark
         params = {
             'PageSize': 100,
             'DateSent>': start_time.strftime('%Y-%m-%d')
         }
         
-        while page_count < max_pages and len(all_messages) < max_messages:
+        while page_count < max_pages:
             if next_page_uri:
                 # Use the full next_page_uri for pagination
                 full_url = f"https://{space}{next_page_uri}"
@@ -638,9 +640,15 @@ def trigger_sync():
             next_page_uri = data.get('next_page_uri')
             if not next_page_uri:
                 break
+            
+            # Safety check - if we hit max pages, warn user
+            if page_count >= max_pages:
+                print(f"Warning: Hit max_pages limit ({max_pages}). There may be more messages to fetch.")
+                break
         
         saved_count = 0
         skipped_count = 0
+        hit_limit = page_count >= max_pages
         
         if MODELS_AVAILABLE and all_messages:
             session = Session()
@@ -683,13 +691,18 @@ def trigger_sync():
             finally:
                 session.close()
         
+        message = f'Fetched {len(all_messages):,} messages from {page_count} pages, saved {saved_count:,} new (skipped {skipped_count:,} existing)'
+        if hit_limit:
+            message += f'. WARNING: Hit page limit ({max_pages} pages). There may be more messages - consider syncing in smaller time windows.'
+        
         return jsonify({
             'success': True,
             'fetched': len(all_messages),
             'saved': saved_count,
             'skipped': skipped_count,
             'pages': page_count,
-            'message': f'Fetched {len(all_messages)} messages from {page_count} pages, saved {saved_count} new (skipped {skipped_count} existing)'
+            'hit_limit': hit_limit,
+            'message': message
         })
         
     except requests.exceptions.RequestException as e:
