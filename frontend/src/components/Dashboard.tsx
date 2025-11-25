@@ -1,438 +1,503 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Treemap } from 'recharts';
-import { Activity, Zap, AlertTriangle, DollarSign, Users, RefreshCw, TrendingUp, TrendingDown, Shield, MessageSquare } from 'lucide-react';
-import { LogStream } from './LogStream';
-import { LogEntry, TimeSeriesPoint, ErrorCluster } from '../types';
+import { 
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
+  PieChart, Pie
+} from 'recharts';
+import { 
+  Activity, AlertTriangle, DollarSign, Users, RefreshCw, 
+  CheckCircle, XCircle, Clock, Search, Download, ChevronDown,
+  TrendingUp, MessageSquare, Filter
+} from 'lucide-react';
+
+// ============================================================================
+// ERROR CODE DICTIONARY
+// ============================================================================
+const ERROR_CODES: Record<number, { name: string; description: string; severity: 'low' | 'medium' | 'high' | 'critical' }> = {
+  30001: { name: 'Queue Overflow', description: 'Message queued but carrier queue full', severity: 'medium' },
+  30002: { name: 'Account Suspended', description: 'Your account has been suspended', severity: 'critical' },
+  30003: { name: 'Unreachable', description: 'Destination handset unreachable', severity: 'medium' },
+  30004: { name: 'Blocked', description: 'Message blocked by carrier', severity: 'high' },
+  30005: { name: 'Unknown Number', description: 'Destination number does not exist', severity: 'high' },
+  30006: { name: 'Landline', description: 'Cannot send SMS to landline', severity: 'low' },
+  30007: { name: 'Carrier Violation', description: 'Message filtered by carrier (spam)', severity: 'critical' },
+  30008: { name: 'Unknown Error', description: 'Unknown delivery error', severity: 'medium' },
+  30009: { name: 'Missing Segment', description: 'Message segment missing', severity: 'medium' },
+  30010: { name: 'Price Limit', description: 'Message exceeds price limit', severity: 'low' },
+  30022: { name: '10DLC Issue', description: 'Number not registered for A2P 10DLC', severity: 'critical' },
+  11200: { name: 'HTTP Error', description: 'HTTP retrieval failure', severity: 'medium' },
+};
 
 // ============================================================================
 // TYPES
 // ============================================================================
-
-interface OverviewStats {
+interface Stats {
   totalVolume: number;
   delivered: number;
   failed: number;
   successRate: number;
   spend: number;
   activeSegments: number;
-  avgLatency: number;
+}
+
+interface ErrorStat {
+  code: number;
+  count: number;
+  severity: string;
+}
+
+interface Message {
+  id: string;
+  timestamp: string;
+  from: string;
+  to: string;
+  status: string;
+  errorCode?: number;
+  body?: string;
+  direction: string;
 }
 
 interface OptOutStats {
   delivered: number;
   defaultCount: number;
   defaultRate: number;
-  defaultKeywords: string[];
   customCount: number;
   customRate: number;
-  customKeywords: string[];
-}
-
-interface LatencyStats {
-  p50: number;
-  p95: number;
-  p99: number;
-  samples: number;
 }
 
 // ============================================================================
 // DATA FETCHING
 // ============================================================================
-
-const fetchJSON = async <T,>(url: string, fallback: T): Promise<T> => {
+const fetchStats = async (): Promise<Stats> => {
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (e) {
-    console.warn(`Failed to fetch ${url}:`, e);
-    return fallback;
+    const res = await fetch('/api/stats/overview');
+    if (!res.ok) throw new Error();
+    return res.json();
+  } catch {
+    return { totalVolume: 0, delivered: 0, failed: 0, successRate: 0, spend: 0, activeSegments: 0 };
   }
 };
 
-const fetchLogs = (startDate?: string, endDate?: string, limit: number = 100): Promise<LogEntry[]> => {
-  let url = `/api/logs_dt?draw=1&start=0&length=${limit}`;
+const fetchErrors = async (): Promise<ErrorStat[]> => {
+  try {
+    const res = await fetch('/api/stats/errors');
+    if (!res.ok) throw new Error();
+    return res.json();
+  } catch {
+    return [];
+  }
+};
+
+const fetchMessages = async (startDate?: string, endDate?: string): Promise<Message[]> => {
+  let url = '/api/logs_dt?draw=1&start=0&length=200';
   if (startDate) url += `&start_date=${startDate}`;
   if (endDate) url += `&end_date=${endDate}`;
   
-  return fetchJSON<any>(url, { data: [] })
-    .then(data => data.data?.map((row: any) => ({
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return data.data?.map((row: any) => ({
       id: row.id,
       timestamp: row.date_created,
       from: row.from_number,
       to: row.to_number,
-      carrier: '—',
-      status: (row.status || 'UNKNOWN').toUpperCase(),
-      errorCode: row.error_code ? String(row.error_code) : undefined,
-      latency: row.date_created && row.date_sent 
-        ? Math.max(new Date(row.date_sent).getTime() - new Date(row.date_created).getTime(), 0) 
-        : undefined,
-      type: row.body?.length > 160 ? 'MMS' : 'SMS',
-      direction: row.direction === 'inbound' ? 'MO' : 'MT',
-      cost: row.price || 0,
-      body: row.body
-    })) || []);
+      status: row.status?.toUpperCase() || 'UNKNOWN',
+      errorCode: row.error_code,
+      body: row.body,
+      direction: row.direction === 'inbound' ? 'IN' : 'OUT'
+    })) || [];
+  } catch {
+    return [];
+  }
 };
 
-const fetchTimeSeries = (): Promise<TimeSeriesPoint[]> =>
-  fetchJSON<Record<string, any>>('/api/stats/timeseries', {})
-    .then(data => Object.keys(data).sort().map(dateStr => ({
-      time: dateStr,
-      throughput: data[dateStr].total || 0,
-      latency: data[dateStr].latencyAvg || 0,
-      errors: data[dateStr].failed || 0
-    })));
-
-const fetchErrorClusters = (): Promise<ErrorCluster[]> =>
-  fetchJSON<ErrorCluster[]>('/api/stats/errors', []);
-
-const fetchOverview = (): Promise<OverviewStats> =>
-  fetchJSON('/api/stats/overview', {
-    totalVolume: 0, delivered: 0, failed: 0, successRate: 0, 
-    spend: 0, activeSegments: 0, avgLatency: 0
-  });
-
-const fetchOptOuts = (): Promise<OptOutStats> =>
-  fetchJSON('/api/stats/optouts', {
-    delivered: 0, defaultCount: 0, defaultRate: 0, defaultKeywords: [],
-    customCount: 0, customRate: 0, customKeywords: []
-  });
-
-const fetchLatencyStats = (): Promise<LatencyStats> =>
-  fetchJSON('/api/stats/latency', { p50: 0, p95: 0, p99: 0, samples: 0 });
+const fetchOptOuts = async (): Promise<OptOutStats> => {
+  try {
+    const res = await fetch('/api/stats/optouts');
+    if (!res.ok) throw new Error();
+    return res.json();
+  } catch {
+    return { delivered: 0, defaultCount: 0, defaultRate: 0, customCount: 0, customRate: 0 };
+  }
+};
 
 // ============================================================================
-// MAIN DASHBOARD COMPONENT
+// MAIN COMPONENT
 // ============================================================================
-
 export const Dashboard: React.FC = () => {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [chartData, setChartData] = useState<TimeSeriesPoint[]>([]);
-  const [hoveredCluster, setHoveredCluster] = useState<ErrorCluster | null>(null);
-  const [errorClusters, setErrorClusters] = useState<ErrorCluster[]>([]);
-  const [overview, setOverview] = useState<OverviewStats>({
-    totalVolume: 0, delivered: 0, failed: 0, successRate: 0,
-    spend: 0, activeSegments: 0, avgLatency: 0
-  });
-  const [optouts, setOptouts] = useState<OptOutStats>({
-    delivered: 0, defaultCount: 0, defaultRate: 0, defaultKeywords: [],
-    customCount: 0, customRate: 0, customKeywords: []
-  });
-  const [latencyStats, setLatencyStats] = useState<LatencyStats>({ p50: 0, p95: 0, p99: 0, samples: 0 });
+  const [stats, setStats] = useState<Stats>({ totalVolume: 0, delivered: 0, failed: 0, successRate: 0, spend: 0, activeSegments: 0 });
+  const [errors, setErrors] = useState<ErrorStat[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [optouts, setOptouts] = useState<OptOutStats>({ delivered: 0, defaultCount: 0, defaultRate: 0, customCount: 0, customRate: 0 });
   const [loading, setLoading] = useState(true);
-  const [logsLoading, setLogsLoading] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  // Load dashboard stats
-  const loadStats = useCallback(async () => {
+  // Load all data
+  const loadData = useCallback(async () => {
     setLoading(true);
-    const [series, clusters, overviewData, optoutData, latencyData] = await Promise.all([
-      fetchTimeSeries(),
-      fetchErrorClusters(),
-      fetchOverview(),
-      fetchOptOuts(),
-      fetchLatencyStats()
+    const [statsData, errorsData, messagesData, optoutsData] = await Promise.all([
+      fetchStats(),
+      fetchErrors(),
+      fetchMessages(),
+      fetchOptOuts()
     ]);
-    setChartData(series);
-    setErrorClusters(clusters);
-    setOverview(overviewData);
-    setOptouts(optoutData);
-    setLatencyStats(latencyData);
+    setStats(statsData);
+    setErrors(errorsData);
+    setMessages(messagesData);
+    setOptouts(optoutsData);
     setLastUpdate(new Date());
     setLoading(false);
   }, []);
 
-  // Load logs with optional date filter
-  const loadLogs = useCallback(async (startDate?: string, endDate?: string) => {
-    setLogsLoading(true);
-    const logsData = await fetchLogs(startDate, endDate, 100);
-    setLogs(logsData);
-    setLogsLoading(false);
-  }, []);
-
-  // Handle date filter from LogStream
-  const handleDateFilter = useCallback((startDate: string, endDate: string) => {
-    loadLogs(startDate, endDate);
-  }, [loadLogs]);
+  // Filter messages by date
+  const handleFilter = async () => {
+    setMessagesLoading(true);
+    const data = await fetchMessages(startDate, endDate);
+    setMessages(data);
+    setMessagesLoading(false);
+  };
 
   // Initial load
   useEffect(() => {
-    loadStats();
-    loadLogs();
-  }, [loadStats, loadLogs]);
+    loadData();
+  }, [loadData]);
 
-  // Periodic refresh of stats (not logs - those are fetched on demand)
+  // Auto-refresh every 60 seconds
   useEffect(() => {
-    const interval = setInterval(loadStats, 60000); // Refresh stats every minute
+    const interval = setInterval(loadData, 60000);
     return () => clearInterval(interval);
-  }, [loadStats]);
+  }, [loadData]);
 
-  // Treemap custom renderer
-  const TreemapCell = (props: any) => {
-    const { x, y, width, height, payload, name } = props;
-    const colors: Record<string, { bg: string; border: string; text: string }> = {
-      critical: { bg: 'rgba(255,0,60,0.25)', border: '#ff003c', text: '#ff003c' },
-      high: { bg: 'rgba(255,174,0,0.2)', border: '#ffae00', text: '#ffae00' },
-      medium: { bg: 'rgba(0,240,255,0.15)', border: '#00f0ff', text: '#00f0ff' },
-      low: { bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.3)', text: '#888' }
-    };
-    const c = colors[payload?.severity] || colors.low;
+  // Filter messages by status
+  const filteredMessages = statusFilter === 'all' 
+    ? messages 
+    : messages.filter(m => m.status.toLowerCase() === statusFilter);
 
-    return (
-      <g>
-        <rect
-          x={x} y={y} width={width} height={height}
-          fill={c.bg} stroke={c.border} strokeWidth={1.5}
-          className="cursor-pointer transition-all hover:brightness-125"
-          onMouseEnter={() => setHoveredCluster(payload)}
-          onMouseLeave={() => setHoveredCluster(null)}
-        />
-        {width > 45 && height > 35 && (
-          <>
-            <text x={x + width/2} y={y + height/2 - 6} textAnchor="middle" 
-                  fill={c.text} fontSize={13} fontWeight="bold" className="font-mono">
-              {name}
-            </text>
-            <text x={x + width/2} y={y + height/2 + 10} textAnchor="middle" 
-                  fill="rgba(255,255,255,0.5)" fontSize={10} className="font-mono">
-              {payload?.count?.toLocaleString()}
-            </text>
-          </>
-        )}
-      </g>
-    );
+  // Format time to PST
+  const formatTime = (timestamp: string) => {
+    if (!timestamp) return '—';
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleString('en-US', { 
+        timeZone: 'America/Los_Angeles',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch {
+      return '—';
+    }
+  };
+
+  // Severity colors
+  const severityColor = (severity: string) => {
+    switch (severity) {
+      case 'critical': return 'bg-red-500';
+      case 'high': return 'bg-orange-500';
+      case 'medium': return 'bg-yellow-500';
+      default: return 'bg-slate-400';
+    }
+  };
+
+  const statusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'delivered': return 'bg-emerald-100 text-emerald-700';
+      case 'sent': return 'bg-blue-100 text-blue-700';
+      case 'failed': return 'bg-red-100 text-red-700';
+      case 'undelivered': return 'bg-red-100 text-red-700';
+      case 'queued': return 'bg-amber-100 text-amber-700';
+      case 'received': return 'bg-purple-100 text-purple-700';
+      default: return 'bg-slate-100 text-slate-700';
+    }
   };
 
   return (
-    <div className="flex flex-col gap-5 p-5 pb-24 min-h-full">
-      
-      {/* HEADER BAR */}
+    <div className="p-6 space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white tracking-tight">SignalWire Analytics</h1>
-          <p className="text-xs text-gray-500 font-mono">
+          <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
+          <p className="text-sm text-slate-500">
             {lastUpdate ? `Last updated: ${lastUpdate.toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' })} PST` : 'Loading...'}
           </p>
         </div>
         <button
-          onClick={() => { loadStats(); loadLogs(); }}
+          onClick={loadData}
           disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 
-                     text-sm text-gray-300 hover:text-white transition-all disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg 
+                     hover:bg-blue-700 disabled:opacity-50 transition-colors font-medium"
         >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          {loading ? 'Syncing...' : 'Refresh'}
+          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          Refresh
         </button>
       </div>
 
-      {/* VOLUME CHART */}
-      <section className="glass-panel rounded-2xl overflow-hidden h-[220px] relative">
-        <div className="absolute top-4 left-5 z-10 flex gap-8">
-          <div>
-            <div className="text-[10px] uppercase text-gray-500 tracking-widest mb-1">24h Volume</div>
-            <div className="text-3xl font-bold text-white">
-              {overview.totalVolume.toLocaleString()}
-              <span className="text-sm text-neon-blue ml-2 font-normal">msgs</span>
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase text-gray-500 tracking-widest mb-1">Avg Latency</div>
-            <div className="text-3xl font-bold text-white">
-              {Math.round(overview.avgLatency)}
-              <span className="text-sm text-neon-amber ml-2 font-normal">ms</span>
-            </div>
-          </div>
-        </div>
-        <div className="absolute inset-0 opacity-20 grid-bg"></div>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData} margin={{ top: 80, right: 0, bottom: 0, left: 0 }}>
-            <defs>
-              <linearGradient id="throughputGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#00f0ff" stopOpacity={0.4}/>
-                <stop offset="100%" stopColor="#00f0ff" stopOpacity={0}/>
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="time" hide />
-            <YAxis hide domain={['auto', 'auto']} />
-            <Tooltip 
-              contentStyle={{ background: '#0a0a0a', border: '1px solid #333', borderRadius: 8 }}
-              labelStyle={{ color: '#888' }}
-              itemStyle={{ color: '#00f0ff' }}
-            />
-            <Area type="monotone" dataKey="throughput" stroke="#00f0ff" strokeWidth={2}
-                  fill="url(#throughputGrad)" isAnimationActive={false} />
-          </AreaChart>
-        </ResponsiveContainer>
-      </section>
-
-      {/* KPI ROW */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KPICard icon={<Activity />} label="Success Rate" 
-                 value={`${overview.successRate.toFixed(1)}%`} 
-                 color="green" trend={overview.successRate > 80 ? 'up' : 'down'} />
-        <KPICard icon={<DollarSign />} label="Spend (24h)" 
-                 value={`$${overview.spend.toFixed(2)}`} color="amber" />
-        <KPICard icon={<AlertTriangle />} label="Failed" 
-                 value={overview.failed.toLocaleString()} color="red" />
-        <KPICard icon={<Users />} label="Recipients" 
-                 value={overview.activeSegments.toLocaleString()} color="blue" />
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <KPICard 
+          icon={<MessageSquare className="text-blue-600" />}
+          label="Total Messages"
+          value={stats.totalVolume.toLocaleString()}
+          subtext="Last 24 hours"
+        />
+        <KPICard 
+          icon={<CheckCircle className="text-emerald-600" />}
+          label="Delivered"
+          value={stats.delivered.toLocaleString()}
+          subtext={`${stats.successRate.toFixed(1)}% success`}
+          highlight="green"
+        />
+        <KPICard 
+          icon={<XCircle className="text-red-600" />}
+          label="Failed"
+          value={stats.failed.toLocaleString()}
+          subtext="Need attention"
+          highlight="red"
+        />
+        <KPICard 
+          icon={<DollarSign className="text-amber-600" />}
+          label="Spend"
+          value={`$${stats.spend.toFixed(2)}`}
+          subtext="Last 24 hours"
+        />
+        <KPICard 
+          icon={<Users className="text-purple-600" />}
+          label="Recipients"
+          value={stats.activeSegments.toLocaleString()}
+          subtext="Unique numbers"
+        />
       </div>
 
-      {/* ERROR TREEMAP */}
-      <section className="glass-panel rounded-2xl p-5 min-h-[240px]">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-bold uppercase tracking-widest text-neon-red flex items-center gap-2">
-            <Zap size={16} /> Error Code Analysis
+      {/* Error Analysis + Opt-Out Stats */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Error Code Breakdown */}
+        <div className="card p-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+            <AlertTriangle size={20} className="text-red-500" />
+            Error Code Breakdown
           </h3>
-          {hoveredCluster && (
-            <span className="text-xs text-white/70 font-mono animate-pulse">
-              Error {hoveredCluster.code}: {hoveredCluster.count?.toLocaleString()} occurrences
-            </span>
+          {errors.length > 0 ? (
+            <div className="space-y-3">
+              {errors.map((err) => {
+                const info = ERROR_CODES[err.code] || { name: `Error ${err.code}`, description: 'Unknown error', severity: 'medium' };
+                return (
+                  <div key={err.code} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
+                    <div className={`w-3 h-3 rounded-full ${severityColor(info.severity)}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-slate-700">{err.code}</span>
+                        <span className="font-medium text-slate-800">{info.name}</span>
+                      </div>
+                      <p className="text-sm text-slate-500 truncate">{info.description}</p>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-lg font-bold text-slate-800">{err.count.toLocaleString()}</div>
+                      <div className="text-xs text-slate-400">occurrences</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-slate-400">
+              <CheckCircle size={32} className="mx-auto mb-2 text-emerald-400" />
+              <p>No errors detected</p>
+            </div>
           )}
         </div>
-        {errorClusters.length > 0 ? (
-          <div className="h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <Treemap data={errorClusters} dataKey="count" stroke="#0a0a0a" content={<TreemapCell />} />
-            </ResponsiveContainer>
-          </div>
-        ) : (
-          <div className="h-[180px] flex items-center justify-center text-gray-600 text-sm">
-            No errors detected — looking good! ✓
-          </div>
-        )}
-      </section>
 
-      {/* OPT-OUT METERS + LATENCY */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <OptOutMeter
-          title="Standard Opt-Outs"
-          subtitle="STOP • UNSUBSCRIBE"
-          icon={<Shield size={18} />}
-          count={optouts.defaultCount}
-          rate={optouts.defaultRate}
-          delivered={optouts.delivered}
-          keywords={optouts.defaultKeywords}
-          color="blue"
-        />
-        <OptOutMeter
-          title="Custom Opt-Outs"
-          subtitle="Extended keyword watch"
-          icon={<MessageSquare size={18} />}
-          count={optouts.customCount}
-          rate={optouts.customRate}
-          delivered={optouts.delivered}
-          keywords={optouts.customKeywords}
-          color="amber"
-        />
-        <LatencyCard stats={latencyStats} />
+        {/* Opt-Out Stats */}
+        <div className="card p-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+            <Activity size={20} className="text-blue-500" />
+            Opt-Out Rates
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-blue-50 rounded-xl p-4">
+              <div className="text-sm text-blue-600 font-medium mb-1">Standard Opt-Outs</div>
+              <div className="text-3xl font-bold text-blue-700">{optouts.defaultRate.toFixed(2)}%</div>
+              <div className="text-sm text-blue-500 mt-1">
+                {optouts.defaultCount.toLocaleString()} STOP/UNSUBSCRIBE
+              </div>
+              <div className="text-xs text-blue-400 mt-2">
+                of {optouts.delivered.toLocaleString()} delivered
+              </div>
+            </div>
+            <div className="bg-amber-50 rounded-xl p-4">
+              <div className="text-sm text-amber-600 font-medium mb-1">Custom Opt-Outs</div>
+              <div className="text-3xl font-bold text-amber-700">{optouts.customRate.toFixed(2)}%</div>
+              <div className="text-sm text-amber-500 mt-1">
+                {optouts.customCount.toLocaleString()} custom keywords
+              </div>
+              <div className="text-xs text-amber-400 mt-2">
+                Extended keyword matching
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* MESSAGE FEED */}
-      <section className="flex-1 min-h-[400px]">
-        <LogStream 
-          logs={logs} 
-          onDateFilter={handleDateFilter}
-          loading={logsLoading}
-        />
-      </section>
+      {/* Message Feed */}
+      <div className="card">
+        <div className="p-4 border-b border-slate-100">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+              <MessageSquare size={20} className="text-blue-500" />
+              Message Feed
+              <span className="text-sm font-normal text-slate-400">
+                ({filteredMessages.length} messages)
+              </span>
+            </h3>
+            
+            {/* Filters */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Status Filter */}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm
+                           focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Status</option>
+                <option value="delivered">Delivered</option>
+                <option value="sent">Sent</option>
+                <option value="failed">Failed</option>
+                <option value="queued">Queued</option>
+                <option value="received">Received</option>
+              </select>
+
+              {/* Date Range */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm
+                             focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-slate-400">to</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm
+                             focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={handleFilter}
+                  disabled={messagesLoading}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg
+                             hover:bg-slate-900 disabled:opacity-50 text-sm font-medium"
+                >
+                  <Filter size={14} />
+                  {messagesLoading ? 'Loading...' : 'Filter'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-slate-50 border-b border-slate-100">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Time (PST)</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Type</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">From</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">To</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Message</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Error</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredMessages.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                    No messages found. Try adjusting your filters.
+                  </td>
+                </tr>
+              ) : (
+                filteredMessages.map((msg) => (
+                  <tr key={msg.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">
+                      {formatTime(msg.timestamp)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full
+                        ${msg.direction === 'OUT' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                        {msg.direction}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm font-mono text-slate-700">{msg.from}</td>
+                    <td className="px-4 py-3 text-sm font-mono text-slate-700">{msg.to}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600 max-w-xs truncate" title={msg.body}>
+                      {msg.body || '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {msg.errorCode ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-600 
+                                         text-xs font-mono rounded" title={ERROR_CODES[msg.errorCode]?.description}>
+                          {msg.errorCode}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${statusColor(msg.status)}`}>
+                        {msg.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Info Banner */}
+      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
+        <Activity className="text-blue-500 mt-0.5" size={20} />
+        <div>
+          <p className="text-sm text-blue-800 font-medium">
+            Currently showing {messages.length} messages from your database.
+          </p>
+          <p className="text-sm text-blue-600 mt-1">
+            Run <code className="bg-blue-100 px-1 rounded">python sync_logs.py --hours 24</code> to pull more messages from SignalWire.
+          </p>
+        </div>
+      </div>
     </div>
   );
 };
 
 // ============================================================================
-// SUB-COMPONENTS
+// KPI CARD COMPONENT
 // ============================================================================
-
-const KPICard = ({ icon, label, value, color, trend }: {
-  icon: React.ReactNode; label: string; value: string; color: string; trend?: 'up' | 'down';
-}) => {
-  const colors: Record<string, string> = {
-    green: 'text-emerald-400', amber: 'text-amber-400', 
-    red: 'text-rose-400', blue: 'text-cyan-400'
-  };
-  return (
-    <div className="glass-panel rounded-xl p-4 hover:border-white/20 transition-all group">
-      <div className={`${colors[color]} opacity-40 group-hover:opacity-70 transition-opacity mb-2`}>
-        {icon}
-      </div>
-      <div className="text-[10px] uppercase text-gray-500 tracking-widest mb-1">{label}</div>
-      <div className="text-xl font-bold text-white flex items-center gap-2">
-        {value}
-        {trend && (
-          trend === 'up' 
-            ? <TrendingUp size={14} className="text-emerald-400" />
-            : <TrendingDown size={14} className="text-rose-400" />
-        )}
-      </div>
+const KPICard = ({ icon, label, value, subtext, highlight }: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  subtext: string;
+  highlight?: 'green' | 'red';
+}) => (
+  <div className={`card p-5 ${highlight === 'green' ? 'border-emerald-200 bg-emerald-50/50' : 
+                              highlight === 'red' ? 'border-red-200 bg-red-50/50' : ''}`}>
+    <div className="flex items-center gap-3 mb-3">
+      {icon}
+      <span className="text-sm font-medium text-slate-500">{label}</span>
     </div>
-  );
-};
-
-const OptOutMeter = ({ title, subtitle, icon, count, rate, delivered, keywords, color }: {
-  title: string; subtitle: string; icon: React.ReactNode;
-  count: number; rate: number; delivered: number; keywords: string[]; color: 'blue' | 'amber';
-}) => {
-  const accent = color === 'blue' ? 'text-cyan-400 bg-cyan-500/10' : 'text-amber-400 bg-amber-500/10';
-  const barColor = color === 'blue' ? 'bg-cyan-500' : 'bg-amber-500';
-  
-  return (
-    <div className="glass-panel rounded-xl p-5 flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <div className={`p-2 rounded-lg ${accent}`}>{icon}</div>
-        <div>
-          <div className="text-sm font-semibold text-white">{title}</div>
-          <div className="text-[10px] text-gray-500 uppercase tracking-wider">{subtitle}</div>
-        </div>
-      </div>
-      
-      <div className="flex items-end justify-between">
-        <div>
-          <div className="text-3xl font-bold text-white">
-            {rate > 0 ? `${rate.toFixed(2)}%` : '—'}
-          </div>
-          <div className="text-xs text-gray-500">
-            {count.toLocaleString()} of {delivered.toLocaleString()} delivered
-          </div>
-        </div>
-      </div>
-      
-      {/* Progress bar */}
-      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-        <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(rate * 10, 100)}%` }} />
-      </div>
-      
-      {/* Keywords preview */}
-      {keywords.length > 0 && (
-        <div className="text-[10px] text-gray-600 truncate">
-          Tracking: {keywords.slice(0, 4).join(', ')}{keywords.length > 4 ? '...' : ''}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const LatencyCard = ({ stats }: { stats: LatencyStats }) => (
-  <div className="glass-panel rounded-xl p-5 flex flex-col gap-3">
-    <div className="text-sm font-semibold text-white">Latency Distribution</div>
-    <div className="text-[10px] text-gray-500 uppercase tracking-wider">
-      {stats.samples.toLocaleString()} samples (24h)
-    </div>
-    
-    <div className="grid grid-cols-3 gap-3 mt-2">
-      <div className="text-center">
-        <div className="text-2xl font-bold text-emerald-400">{Math.round(stats.p50)}</div>
-        <div className="text-[10px] text-gray-500">P50 (ms)</div>
-      </div>
-      <div className="text-center">
-        <div className="text-2xl font-bold text-amber-400">{Math.round(stats.p95)}</div>
-        <div className="text-[10px] text-gray-500">P95 (ms)</div>
-      </div>
-      <div className="text-center">
-        <div className="text-2xl font-bold text-rose-400">{Math.round(stats.p99)}</div>
-        <div className="text-[10px] text-gray-500">P99 (ms)</div>
-      </div>
-    </div>
+    <div className="text-2xl font-bold text-slate-800">{value}</div>
+    <div className="text-sm text-slate-400 mt-1">{subtext}</div>
   </div>
 );
 

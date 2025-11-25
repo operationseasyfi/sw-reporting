@@ -512,6 +512,115 @@ def get_alerts():
         session.close()
 
 # ============================================================================
+# SIGNALWIRE DIRECT FETCH (for real-time data)
+# ============================================================================
+
+@app.route('/api/sync/trigger')
+@requires_auth
+def trigger_sync():
+    """
+    Trigger a sync from SignalWire API.
+    This pulls recent messages directly from SignalWire and stores them.
+    """
+    import requests
+    from requests.auth import HTTPBasicAuth
+    
+    PROJECT_ID = os.getenv('SIGNALWIRE_PROJECT_ID')
+    AUTH_TOKEN = os.getenv('SIGNALWIRE_AUTH_TOKEN')
+    SPACE_URL = os.getenv('SIGNALWIRE_SPACE_URL', '')
+    
+    if not all([PROJECT_ID, AUTH_TOKEN, SPACE_URL]):
+        return jsonify({'error': 'SignalWire credentials not configured'}), 500
+    
+    # Clean up space URL
+    space = SPACE_URL.replace('https://', '').replace('http://', '').rstrip('/')
+    base_url = f"https://{space}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Messages.json"
+    
+    hours = int(request.args.get('hours', 1))
+    limit = min(int(request.args.get('limit', 500)), 1000)
+    
+    # Calculate date range
+    start_time = datetime.datetime.utcnow() - timedelta(hours=hours)
+    
+    try:
+        # Fetch from SignalWire
+        auth = HTTPBasicAuth(PROJECT_ID, AUTH_TOKEN)
+        params = {
+            'PageSize': min(limit, 100),
+            'DateSent>': start_time.strftime('%Y-%m-%d')
+        }
+        
+        response = requests.get(base_url, auth=auth, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        messages = data.get('messages', [])
+        saved_count = 0
+        
+        if MODELS_AVAILABLE and messages:
+            session = Session()
+            try:
+                for msg in messages:
+                    # Check if exists
+                    existing = session.query(SMSLog).filter(SMSLog.id == msg['sid']).first()
+                    if not existing:
+                        log = SMSLog(
+                            id=msg['sid'],
+                            date_created=datetime.datetime.fromisoformat(msg['date_created'].replace('Z', '+00:00')) if msg.get('date_created') else None,
+                            date_sent=datetime.datetime.fromisoformat(msg['date_sent'].replace('Z', '+00:00')) if msg.get('date_sent') else None,
+                            to_number=msg.get('to'),
+                            from_number=msg.get('from'),
+                            status=msg.get('status'),
+                            error_code=int(msg['error_code']) if msg.get('error_code') else None,
+                            error_message=msg.get('error_message'),
+                            direction=msg.get('direction'),
+                            body=msg.get('body'),
+                            price=float(msg['price']) if msg.get('price') else 0
+                        )
+                        session.add(log)
+                        saved_count += 1
+                
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                print(f"Error saving messages: {e}")
+            finally:
+                session.close()
+        
+        return jsonify({
+            'success': True,
+            'fetched': len(messages),
+            'saved': saved_count,
+            'message': f'Fetched {len(messages)} messages, saved {saved_count} new'
+        })
+        
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'SignalWire API error: {str(e)}'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/db/stats')
+@requires_auth  
+def get_db_stats():
+    """Get database statistics"""
+    if not MODELS_AVAILABLE:
+        return jsonify({'error': 'Database not available'}), 503
+    
+    session = Session()
+    try:
+        total = session.execute(text("SELECT COUNT(*) FROM sms_logs")).scalar()
+        oldest = session.execute(text("SELECT MIN(date_created) FROM sms_logs")).scalar()
+        newest = session.execute(text("SELECT MAX(date_created) FROM sms_logs")).scalar()
+        
+        return jsonify({
+            'total_messages': total,
+            'oldest_message': oldest.isoformat() if oldest else None,
+            'newest_message': newest.isoformat() if newest else None
+        })
+    finally:
+        session.close()
+
+# ============================================================================
 # STARTUP
 # ============================================================================
 
