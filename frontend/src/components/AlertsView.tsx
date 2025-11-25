@@ -73,19 +73,6 @@ export const AlertsView: React.FC = () => {
                 </div>
             ))}
 
-            {/* Past Alerts */}
-             <div className="mt-8 pt-8 border-t border-white/5">
-                <h3 className="text-xs font-bold uppercase text-gray-500 mb-4">Resolved Incidents (Last 24h)</h3>
-                <div className="glass-panel p-4 rounded-lg flex items-center gap-4 opacity-60">
-                    <div className="p-2 bg-neon-green/10 text-neon-green rounded">
-                        <CheckCircle size={16} />
-                    </div>
-                    <div>
-                        <div className="text-sm text-gray-300 font-bold">Throughput Degradation - Route B</div>
-                        <div className="text-xs text-gray-500 font-mono">Resolved 4 hours ago</div>
-                    </div>
-                </div>
-             </div>
         </div>
     </div>
   );

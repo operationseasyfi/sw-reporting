@@ -1,11 +1,25 @@
-from flask import Flask, render_template, jsonify, request, send_from_directory, send_from_directory
-from sqlalchemy import func, text
+from flask import Flask, render_template, jsonify, request, send_from_directory
+from sqlalchemy import func, text, or_
 from sqlalchemy.dialects.postgresql import insert
 import datetime
+import math
 import os
 from datetime import timedelta
 
 app = Flask(__name__, static_folder='frontend/dist', template_folder='frontend/dist')
+
+DEFAULT_STOP_KEYWORDS = ['stop', 'unsubscribe']
+ADVANCED_STOP_KEYWORDS = ['cancel', 'quit', 'remove', 'end', 'halt', 'pause']
+
+def keyword_filter(keywords):
+    if not keywords or not MODELS_AVAILABLE:
+        return None
+    lowered = [kw.lower() for kw in keywords]
+    filters = [SMSLog.body.ilike(f'%{kw}%') for kw in lowered]
+    return or_(*filters)
+
+def get_time_window(hours=24):
+    return datetime.datetime.utcnow() - timedelta(hours=hours)
 
 # Import models with error handling
 try:
@@ -232,7 +246,7 @@ def get_timeseries_stats():
             if not date_val: continue
             d_str = date_val.strftime('%Y-%m-%d')
             if d_str not in data:
-                data[d_str] = {'delivered': 0, 'failed': 0, 'undelivered': 0, 'total': 0}
+                data[d_str] = {'delivered': 0, 'failed': 0, 'undelivered': 0, 'total': 0, 'latencyAvg': 0}
             
             status_lower = status.lower()
             data[d_str]['total'] += count
@@ -243,7 +257,24 @@ def get_timeseries_stats():
                 data[d_str]['failed'] += count
             elif status_lower in ['undelivered']:
                 data[d_str]['undelivered'] += count
-                
+        
+        latency_rows = session.query(
+            func.date_trunc('day', SMSLog.date_created).label('day'),
+            func.avg(func.extract('epoch', SMSLog.date_sent - SMSLog.date_created)).label('avg_latency')
+        ).filter(
+            SMSLog.date_created >= cutoff,
+            SMSLog.date_sent != None
+        ).group_by('day').all()
+
+        for date_val, avg_latency in latency_rows:
+            if not date_val:
+                continue
+            d_str = date_val.strftime('%Y-%m-%d')
+            if d_str not in data:
+                data[d_str] = {'delivered': 0, 'failed': 0, 'undelivered': 0, 'total': 0, 'latencyAvg': 0}
+            if avg_latency is not None:
+                data[d_str]['latencyAvg'] = round(avg_latency * 1000, 2)
+
         return jsonify(data)
     except Exception as e:
         print(f"Error in timeseries: {e}")
@@ -253,6 +284,8 @@ def get_timeseries_stats():
 
 @app.route('/api/stats/errors')
 def get_error_stats():
+    if not MODELS_AVAILABLE:
+        return jsonify([]), 503
     session = Session()
     try:
         # Top 10 Error Codes
@@ -262,8 +295,17 @@ def get_error_stats():
             SMSLog.error_code != None
         ).group_by(SMSLog.error_code)\
          .order_by(func.count(SMSLog.id).desc()).limit(10).all()
-         
-        return jsonify([{'code': r[0], 'count': r[1]} for r in results])
+        
+        def severity_from_count(count):
+            if count >= 1000:
+                return 'critical'
+            if count >= 200:
+                return 'high'
+            if count >= 50:
+                return 'medium'
+            return 'low'
+
+        return jsonify([{'code': r[0], 'count': r[1], 'severity': severity_from_count(r[1])} for r in results])
     finally:
         session.close()
 
@@ -330,73 +372,136 @@ def get_alerts():
     finally:
         session.close()
 
-@app.route('/api/stats/carriers')
-def get_carrier_stats():
-    """
-    Returns carrier statistics for the last 24 hours.
-    Note: Carrier detection from phone numbers is simplified.
-    """
+@app.route('/api/stats/overview')
+def get_overview_stats():
+    if not MODELS_AVAILABLE:
+        return jsonify({}), 503
+
     session = Session()
     try:
-        # Last 24 hours
-        cutoff = datetime.datetime.utcnow() - timedelta(hours=24)
-        
-        # Get all messages in last 24h
-        messages = session.query(SMSLog).filter(
-            SMSLog.date_created >= cutoff
-        ).all()
-        
-        # Simple carrier detection from phone number prefix
-        # This is a simplified version - you may want to use a proper carrier lookup service
-        carrier_map = {
-            'verizon': ['+1'],
-            'att': ['+1'],
-            't-mobile': ['+1'],
-        }
-        
-        # Aggregate by status
-        stats = {}
-        for msg in messages:
-            # Simplified: use first 3 digits of to_number for carrier detection
-            # In production, use a proper carrier lookup API
-            carrier = 'Unknown'
-            if msg.to_number:
-                # Very basic detection - you should use a proper service
-                if msg.to_number.startswith('+1'):
-                    carrier = 'US Carrier'  # Generic for now
-            
-            if carrier not in stats:
-                stats[carrier] = {
-                    'total': 0,
-                    'delivered': 0,
-                    'failed': 0,
-                    'undelivered': 0
-                }
-            
-            stats[carrier]['total'] += 1
-            status_lower = (msg.status or '').lower()
-            if status_lower in ['delivered', 'sent']:
-                stats[carrier]['delivered'] += 1
-            elif status_lower == 'failed':
-                stats[carrier]['failed'] += 1
-            elif status_lower == 'undelivered':
-                stats[carrier]['undelivered'] += 1
-        
-        # Format response
-        result = []
-        for carrier_name, data in stats.items():
-            delivery_rate = (data['delivered'] / data['total'] * 100) if data['total'] > 0 else 0
-            result.append({
-                'name': carrier_name,
-                'deliveryRate': round(delivery_rate, 1),
-                'volume': data['total'],
-                'status': 'operational' if delivery_rate > 95 else 'degraded' if delivery_rate > 90 else 'critical'
-            })
-        
-        return jsonify(result)
+        window = get_time_window()
+        base_filter = SMSLog.date_created >= window
+
+        total = session.query(func.count(SMSLog.id)).filter(base_filter).scalar() or 0
+        delivered = session.query(func.count(SMSLog.id)).filter(
+            base_filter,
+            SMSLog.status.ilike('delivered') | SMSLog.status.ilike('sent')
+        ).scalar() or 0
+        failed = session.query(func.count(SMSLog.id)).filter(
+            base_filter,
+            SMSLog.status.ilike('failed') | SMSLog.status.ilike('undelivered')
+        ).scalar() or 0
+        spend = session.query(func.coalesce(func.sum(SMSLog.price), 0)).filter(base_filter).scalar() or 0
+        active_segments = session.query(func.count(func.distinct(SMSLog.to_number))).filter(base_filter).scalar() or 0
+        avg_latency = session.query(
+            func.avg(func.extract('epoch', SMSLog.date_sent - SMSLog.date_created))
+        ).filter(
+            base_filter,
+            SMSLog.date_sent != None
+        ).scalar() or 0
+
+        return jsonify({
+            'totalVolume': total,
+            'delivered': delivered,
+            'failed': failed,
+            'successRate': (delivered / total * 100) if total else 0,
+            'spend': float(spend),
+            'activeSegments': active_segments,
+            'avgLatency': round(avg_latency * 1000, 2) if avg_latency else 0
+        })
     except Exception as e:
-        print(f"Error in carrier stats: {e}")
-        return jsonify([])
+        print(f"Error in overview stats: {e}")
+        return jsonify({}), 500
+    finally:
+        session.close()
+
+@app.route('/api/stats/optouts')
+def get_optout_stats():
+    if not MODELS_AVAILABLE:
+        return jsonify({}), 503
+
+    session = Session()
+    try:
+        window = get_time_window()
+        base_filter = SMSLog.date_created >= window
+        delivered = session.query(func.count(SMSLog.id)).filter(
+            base_filter,
+            SMSLog.status.ilike('delivered') | SMSLog.status.ilike('sent')
+        ).scalar() or 0
+
+        default_filter = keyword_filter(DEFAULT_STOP_KEYWORDS)
+        extended_filter = keyword_filter(list(set(DEFAULT_STOP_KEYWORDS + ADVANCED_STOP_KEYWORDS)))
+
+        default_count = 0
+        extended_count = 0
+
+        if default_filter is not None:
+            default_count = session.query(func.count(SMSLog.id)).filter(
+                base_filter,
+                SMSLog.body != None,
+                default_filter
+            ).scalar() or 0
+
+        if extended_filter is not None:
+            extended_count = session.query(func.count(SMSLog.id)).filter(
+                base_filter,
+                SMSLog.body != None,
+                extended_filter
+            ).scalar() or 0
+
+        return jsonify({
+            'delivered': delivered,
+            'defaultCount': default_count,
+            'advancedCount': extended_count,
+            'defaultRate': (default_count / delivered * 100) if delivered else 0,
+            'advancedRate': (extended_count / delivered * 100) if delivered else 0,
+            'defaultKeywords': DEFAULT_STOP_KEYWORDS,
+            'advancedKeywords': ADVANCED_STOP_KEYWORDS
+        })
+    except Exception as e:
+        print(f"Error in opt-out stats: {e}")
+        return jsonify({}), 500
+    finally:
+        session.close()
+
+@app.route('/api/stats/latency')
+def get_latency_stats():
+    if not MODELS_AVAILABLE:
+        return jsonify({}), 503
+
+    session = Session()
+    try:
+        window = get_time_window()
+        rows = session.query(
+            func.extract('epoch', SMSLog.date_sent - SMSLog.date_created)
+        ).filter(
+            SMSLog.date_created >= window,
+            SMSLog.date_sent != None
+        ).all()
+
+        latencies = sorted([row[0] * 1000 for row in rows if row[0] is not None])
+
+        def percentile(values, percent):
+            if not values:
+                return 0
+            k = (len(values) - 1) * percent
+            f = math.floor(k)
+            c = math.ceil(k)
+            if f == c:
+                return round(values[int(k)])
+            d0 = values[f] * (c - k)
+            d1 = values[c] * (k - f)
+            return round(d0 + d1, 2)
+
+        return jsonify({
+            'p50': percentile(latencies, 0.5),
+            'p95': percentile(latencies, 0.95),
+            'p99': percentile(latencies, 0.99),
+            'samples': len(latencies)
+        })
+    except Exception as e:
+        print(f"Error in latency stats: {e}")
+        return jsonify({'p50': 0, 'p95': 0, 'p99': 0, 'samples': 0})
     finally:
         session.close()
 

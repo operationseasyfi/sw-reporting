@@ -11,6 +11,7 @@ export interface LogEntry {
   status: MessageStatus;
   errorCode?: string;
   latency?: number; // ms
+  body?: string;
   type: 'SMS' | 'MMS';
   direction: MessageDirection;
   cost: number;
@@ -28,14 +29,6 @@ export interface ErrorCluster {
   description: string;
   count: number;
   severity: 'low' | 'medium' | 'high' | 'critical';
-}
-
-export interface CarrierStat {
-  name: string;
-  deliveryRate: number;
-  latencyAvg: number;
-  volume: number;
-  status: 'operational' | 'degraded' | 'outage';
 }
 
 export interface Alert {

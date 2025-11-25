@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-[#050505] text-[#e5e5e5] overflow-y-auto selection:bg-[#00f0ff] selection:text-black;
+    @apply bg-[#050505] text-[#e5e5e5] overflow-y-auto selection:bg-[#00f0ff] selection:text-black text-[13px] leading-relaxed;
   }
 
   /* Custom Scrollbar */

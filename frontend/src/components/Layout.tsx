@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Globe, Activity, Bell, Settings, Command, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Bell, Menu, X } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -12,8 +12,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeView, setActiveV
 
   const navItems = [
     { id: 'dashboard', label: 'Mission Control', icon: <LayoutDashboard size={18} /> },
-    { id: 'carriers', label: 'Carriers & Routes', icon: <Globe size={18} /> },
-    { id: 'latency', label: 'Latency Telemetry', icon: <Activity size={18} /> },
     { id: 'alerts', label: 'Alerts', icon: <Bell size={18} /> },
   ];
 
@@ -51,16 +49,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeView, setActiveV
           ))}
         </nav>
 
-        <div className="p-4 border-t border-white/5">
-           <button className="flex items-center gap-3 px-3 py-2 text-xs text-gray-500 hover:text-white transition-colors">
-               <Settings size={16} /> System Config
-           </button>
-           <div className="mt-4 px-3 py-2 rounded bg-black/50 border border-white/5">
-              <div className="flex items-center gap-2 text-[10px] text-gray-400 font-mono">
-                  <div className="w-2 h-2 rounded-full bg-neon-green animate-pulse"></div>
-                  SYSTEM OPERATIONAL
-              </div>
-           </div>
+        <div className="p-4 border-t border-white/5 text-[10px] text-gray-500 font-mono">
+           SYSTEM OPERATIONAL
         </div>
       </aside>
 
@@ -74,19 +64,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeView, setActiveV
                  <button className="md:hidden text-gray-400" onClick={() => setMobileMenuOpen(true)}>
                      <Menu size={20} />
                  </button>
-                 <div className="hidden md:flex items-center gap-2 text-gray-500 bg-white/5 px-3 py-1.5 rounded-full border border-white/5 hover:border-white/20 transition-colors cursor-text group">
-                     <Command size={14} className="group-hover:text-neon-blue transition-colors" />
-                     <span className="text-xs font-mono">Search telemetry...</span>
-                     <span className="ml-4 text-[10px] bg-black/40 px-1.5 py-0.5 rounded text-gray-600 border border-white/5">⌘K</span>
-                 </div>
+                 <div className="text-xs font-mono text-gray-500 uppercase tracking-[0.4em]">Telemetry Command</div>
              </div>
              
-             <div className="flex items-center gap-6">
-                <div className="text-right hidden sm:block">
-                    <div className="text-[10px] text-gray-500 font-mono uppercase">Current Period</div>
-                    <div className="text-xs font-bold text-white">LAST 24 HOURS</div>
-                </div>
-                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-gray-700 to-gray-800 border border-white/10"></div>
+             <div className="text-right hidden sm:block">
+                <div className="text-[10px] text-gray-500 font-mono uppercase">Current Period</div>
+                <div className="text-xs font-bold text-white">LAST 24 HOURS</div>
              </div>
          </header>
 

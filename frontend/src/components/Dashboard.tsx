@@ -1,8 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Treemap } from 'recharts';
-import { Activity, ArrowUpRight, ArrowDownRight, Zap, AlertTriangle, DollarSign, Database } from 'lucide-react';
+import { Activity, Zap, AlertTriangle, DollarSign, Database, RefreshCw, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { LogStream } from './LogStream';
 import { LogEntry, TimeSeriesPoint, ErrorCluster } from '../types';
+
+interface OverviewStats {
+  totalVolume: number;
+  delivered: number;
+  failed: number;
+  successRate: number;
+  spend: number;
+  activeSegments: number;
+  avgLatency: number;
+}
+
+interface OptOutStats {
+  delivered: number;
+  defaultCount: number;
+  advancedCount: number;
+  defaultRate: number;
+  advancedRate: number;
+}
+
+interface LatencyStats {
+  p50: number;
+  p95: number;
+  p99: number;
+  samples: number;
+}
 
 // Helper to fetch real logs
 async function fetchLogs(): Promise<LogEntry[]> {
@@ -20,13 +45,14 @@ async function fetchLogs(): Promise<LogEntry[]> {
                 timestamp: row.date_created,
                 from: row.from_number,
                 to: row.to_number,
-                carrier: row.carrier || '—',
+            carrier: row.carrier || '—',
                 status: (row.status || 'UNKNOWN').toUpperCase(),
                 errorCode: row.error_code ? String(row.error_code) : undefined,
                 latency,
                 type: row.body && row.body.length > 160 ? 'MMS' : 'SMS',
                 direction: row.direction === 'inbound' ? 'MO' : 'MT',
-                cost: row.price || 0
+            cost: row.price || 0,
+            body: row.body
             } as LogEntry;
         });
     } catch (e) {
@@ -61,16 +87,29 @@ async function fetchErrorClusters(): Promise<ErrorCluster[]> {
         const res = await fetch('/api/stats/errors');
         if (!res.ok) return [];
         const data = await res.json();
-        return data.map((item: any) => ({
-            code: item.code,
-            description: `Error ${item.code}`,
-            count: item.count,
-            severity: item.count > 1000 ? 'critical' : item.count > 500 ? 'high' : item.count > 100 ? 'medium' : 'low'
-        }));
+        return data;
     } catch (e) {
         console.error("Failed to fetch error clusters", e);
         return [];
     }
+}
+
+async function fetchOverview(): Promise<OverviewStats> {
+  const res = await fetch('/api/stats/overview');
+  if (!res.ok) return { totalVolume: 0, delivered: 0, failed: 0, successRate: 0, spend: 0, activeSegments: 0, avgLatency: 0 };
+  return res.json();
+}
+
+async function fetchOptOuts(): Promise<OptOutStats> {
+  const res = await fetch('/api/stats/optouts');
+  if (!res.ok) return { delivered: 0, defaultCount: 0, advancedCount: 0, defaultRate: 0, advancedRate: 0 };
+  return res.json();
+}
+
+async function fetchLatencyStats(): Promise<LatencyStats> {
+  const res = await fetch('/api/stats/latency');
+  if (!res.ok) return { p50: 0, p95: 0, p99: 0, samples: 0 };
+  return res.json();
 }
 
 export const Dashboard: React.FC = () => {
@@ -79,97 +118,65 @@ export const Dashboard: React.FC = () => {
   const [paused, setPaused] = useState(false);
   const [hoveredCluster, setHoveredCluster] = useState<ErrorCluster | null>(null);
   const [errorClusters, setErrorClusters] = useState<ErrorCluster[]>([]);
-  const [kpis, setKpis] = useState({
+  const [overview, setOverview] = useState<OverviewStats>({
+    totalVolume: 0,
+    delivered: 0,
+    failed: 0,
     successRate: 0,
     spend: 0,
-    failed: 0,
     activeSegments: 0,
-    avgLatency: 0,
-    totalVolume: 0
+    avgLatency: 0
   });
+  const [optouts, setOptouts] = useState<OptOutStats>({
+    delivered: 0,
+    defaultCount: 0,
+    advancedCount: 0,
+    defaultRate: 0,
+    advancedRate: 0
+  });
+  const [latencyStats, setLatencyStats] = useState<LatencyStats>({ p50: 0, p95: 0, p99: 0, samples: 0 });
+  const [snapshotLoading, setSnapshotLoading] = useState<boolean>(false);
 
-  // Initialize Data
+  const loadSnapshot = async () => {
+    setSnapshotLoading(true);
+    try {
+      const [series, clusters, overviewData, optoutData, latencyData] = await Promise.all([
+        fetchTimeSeries(),
+        fetchErrorClusters(),
+        fetchOverview(),
+        fetchOptOuts(),
+        fetchLatencyStats()
+      ]);
+      setChartData(series);
+      setErrorClusters(clusters);
+      setOverview(overviewData);
+      setOptouts(optoutData);
+      setLatencyStats(latencyData);
+    } finally {
+      setSnapshotLoading(false);
+    }
+  };
+
   useEffect(() => {
-    // Initial Fetch
-    Promise.all([fetchLogs(), fetchTimeSeries(), fetchErrorClusters()]).then(([realLogs, realChart, clusterData]) => {
-        setLogs(realLogs);
-        setChartData(realChart);
-        setErrorClusters(clusterData);
-        computeKpis(realLogs, realChart);
-    });
+    fetchLogs().then(setLogs);
+    loadSnapshot();
+    const interval = setInterval(loadSnapshot, 30000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Live Tick
   useEffect(() => {
     if (paused) return;
     const interval = setInterval(async () => {
-      // Fetch real latest logs every second? Maybe too aggressive.
-      // Let's simulate or poll less frequently.
-      // For "Elite" feel, we simulate local updates or poll efficiently.
-      
-      // Poll real data
       const newLogs = await fetchLogs();
       if (newLogs.length > 0) {
-          setLogs(newLogs);
-          computeKpis(newLogs, chartData);
+        setLogs(newLogs);
       }
-
-      // Update chart (mock movement for live effect if using static daily data)
-      setChartData(prev => {
-          if (prev.length === 0) return [];
-          const last = prev[prev.length - 1];
-          // Only append if it's a live chart, but we have daily data.
-          // Let's stick to the daily data or just wiggle the last point for "live" feel
-          return prev;
-      });
-
-    }, 3000);
+    }, 5000);
     return () => clearInterval(interval);
   }, [paused]);
 
-  const currentThroughput = kpis.totalVolume;
-  const currentLatency = Math.round(kpis.avgLatency);
-
-  const computeKpis = (logEntries: LogEntry[], series: TimeSeriesPoint[]) => {
-    if ((!logEntries || logEntries.length === 0) && (!series || series.length === 0)) {
-        setKpis({
-            successRate: 0,
-            spend: 0,
-            failed: 0,
-            activeSegments: 0,
-            avgLatency: 0,
-            totalVolume: 0
-        });
-        return;
-    }
-
-    const totals = series.reduce(
-        (acc, point) => {
-            acc.total += point.throughput || 0;
-            acc.errors += point.errors || 0;
-            return acc;
-        },
-        { total: 0, errors: 0 }
-    );
-
-    const delivered = totals.total - totals.errors;
-    const successRate = totals.total > 0 ? (delivered / totals.total) * 100 : 0;
-
-    const spend = logEntries.reduce((sum, log) => sum + (log.cost || 0), 0);
-    const failedCount = logEntries.filter(log => ['FAILED', 'UNDELIVERED'].includes(log.status)).length;
-    const latencySamples = logEntries.filter(log => typeof log.latency === 'number').map(log => log.latency as number);
-    const avgLatency = latencySamples.length > 0 ? latencySamples.reduce((sum, l) => sum + l, 0) / latencySamples.length : 0;
-    const activeSegments = new Set(logEntries.map(log => log.to)).size;
-
-    setKpis({
-        successRate,
-        spend,
-        failed: failedCount,
-        activeSegments,
-        avgLatency,
-        totalVolume: totals.total
-    });
-  };
+  const currentThroughput = overview.totalVolume;
+  const currentLatency = Math.round(overview.avgLatency);
 
   // Custom Treemap Content
   const CustomTreemapItem = (props: any) => {
@@ -265,6 +272,14 @@ export const Dashboard: React.FC = () => {
               </div>
            </div>
         </div>
+        <button
+          onClick={loadSnapshot}
+          disabled={snapshotLoading}
+          className="absolute top-4 right-4 flex items-center gap-2 text-[11px] font-mono text-gray-400 hover:text-white disabled:opacity-50"
+        >
+          <RefreshCw size={14} className={snapshotLoading ? 'animate-spin' : ''} />
+          {snapshotLoading ? 'Refreshing...' : 'Refresh'}
+        </button>
         
         <div className="absolute inset-0 grid-bg opacity-30"></div>
         <ResponsiveContainer width="100%" height="100%">
@@ -299,7 +314,7 @@ export const Dashboard: React.FC = () => {
         <div className="flex flex-col gap-4">
           <KPICard 
             title="Success Rate" 
-            value={`${kpis.successRate.toFixed(1)}%`} 
+            value={`${overview.successRate.toFixed(1)}%`} 
             trend="" 
             trendUp={true} 
             color="text-neon-green"
@@ -307,7 +322,7 @@ export const Dashboard: React.FC = () => {
           />
           <KPICard 
             title="Total Spend (24h)" 
-            value={`$${kpis.spend.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} 
+            value={`$${overview.spend.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} 
             trend="" 
             trendUp={false} 
             color="text-neon-amber"
@@ -315,7 +330,7 @@ export const Dashboard: React.FC = () => {
           />
            <KPICard 
             title="Failed Messages" 
-            value={kpis.failed.toLocaleString()} 
+            value={overview.failed.toLocaleString()} 
             trend="" 
             trendUp={true} 
             color="text-neon-red"
@@ -323,7 +338,7 @@ export const Dashboard: React.FC = () => {
           />
            <KPICard 
             title="Active Segments" 
-            value={kpis.activeSegments.toLocaleString()} 
+            value={overview.activeSegments.toLocaleString()} 
             trend="Active destinations" 
             trendUp={true} 
             color="text-neon-blue"
@@ -343,17 +358,44 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
           <div className="flex-1 min-h-0">
-             <ResponsiveContainer width="100%" height="100%">
-              <Treemap
-                data={errorClusters}
-                dataKey="count"
-                aspectRatio={4 / 3}
-                stroke="#050505"
-                content={<CustomTreemapItem />}
-              />
-            </ResponsiveContainer>
+            {errorClusters.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <Treemap
+                  data={errorClusters}
+                  dataKey="count"
+                  aspectRatio={4 / 3}
+                  stroke="#050505"
+                  content={<CustomTreemapItem />}
+                />
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-sm text-gray-500 font-mono">
+                No error activity detected in the last 24 hours.
+              </div>
+            )}
           </div>
         </div>
+      </div>
+
+      {/* 3. Opt-out + Latency */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <OptOutCard
+          title="Default Opt-Outs"
+          subtitle="STOP / UNSUBSCRIBE"
+          count={optouts.defaultCount}
+          delivered={optouts.delivered}
+          rate={optouts.defaultRate}
+          variant="default"
+        />
+        <OptOutCard
+          title="Advanced Opt-Outs"
+          subtitle="Expanded keyword watch"
+          count={optouts.advancedCount}
+          delivered={optouts.delivered}
+          rate={optouts.advancedRate}
+          variant="advanced"
+        />
+        <LatencyPanel stats={latencyStats} />
       </div>
 
       {/* 3. LOG STREAM */}
@@ -378,6 +420,52 @@ const KPICard = ({ title, value, trend, trendUp, color, icon }: any) => (
       </div>
     ) : (
       <div className="text-[10px] text-gray-600 font-mono">Live metric</div>
+    )}
+  </div>
+);
+
+const OptOutCard = ({ title, subtitle, count, delivered, rate, variant }:
+  { title: string; subtitle: string; count: number; delivered: number; rate: number; variant: 'default' | 'advanced'; }) => {
+  const hasData = delivered > 0;
+  return (
+  <div className="glass-panel p-4 rounded-xl flex flex-col gap-2">
+    <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest">{title}</div>
+    <div className="text-sm text-gray-400">{subtitle}</div>
+    <div className="flex items-end justify-between">
+      <div>
+        <div className="text-3xl font-display text-white">{hasData ? `${rate.toFixed(2)}%` : '—'}</div>
+        <div className="text-[11px] text-gray-500 font-mono">
+          {hasData ? `${count.toLocaleString()} opt-outs` : 'Awaiting data'}
+        </div>
+      </div>
+      <div className={`text-[10px] font-mono px-2 py-1 rounded ${variant === 'default' ? 'bg-neon-blue/10 text-neon-blue' : 'bg-neon-amber/10 text-neon-amber'}`}>
+        {delivered.toLocaleString()} delivered
+      </div>
+    </div>
+  </div>
+  );
+};
+
+const LatencyPanel = ({ stats }: { stats: LatencyStats }) => (
+  <div className="glass-panel p-4 rounded-xl flex flex-col">
+    <div className="text-[10px] uppercase text-gray-500 font-mono tracking-widest mb-2">Latency Breakdown (ms)</div>
+    {stats.samples > 0 ? (
+      <div className="grid grid-cols-3 gap-3 text-center">
+        <div>
+          <div className="text-2xl font-display text-neon-green">{stats.p50}</div>
+          <div className="text-[10px] text-gray-500 font-mono uppercase">P50</div>
+        </div>
+        <div>
+          <div className="text-2xl font-display text-neon-amber">{stats.p95}</div>
+          <div className="text-[10px] text-gray-500 font-mono uppercase">P95</div>
+        </div>
+        <div>
+          <div className="text-2xl font-display text-neon-red">{stats.p99}</div>
+          <div className="text-[10px] text-gray-500 font-mono uppercase">P99</div>
+        </div>
+      </div>
+    ) : (
+      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">No latency samples yet</div>
     )}
   </div>
 );

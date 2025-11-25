@@ -13,7 +13,7 @@ class SMSLog(Base):
     __tablename__ = 'sms_logs'
 
     # Using Message SID as primary key is natural for SignalWire
-    id = Column(String(34), primary_key=True) 
+    id = Column(String(64), primary_key=True) 
     
     # Core timestamps - Indexed for time-series queries
     date_created = Column(DateTime, nullable=False)
