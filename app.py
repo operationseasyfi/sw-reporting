@@ -161,13 +161,26 @@ def health_check():
         'models_available': MODELS_AVAILABLE
     }), 200 if db_ok else 503
 
-@app.route('/webhooks/signalwire', methods=['POST'])
+@app.route('/webhooks/signalwire', methods=['GET', 'POST'])
 def signalwire_webhook():
     """
     Webhook endpoint for SignalWire DLR notifications.
-    Works with or without Celery - processes synchronously if Celery unavailable.
+    GET: Returns status (useful for testing if endpoint is reachable)
+    POST: Processes DLR callbacks
     """
+    # GET request - just confirm the endpoint is alive
+    if request.method == 'GET':
+        return jsonify({
+            'status': 'ok',
+            'message': 'SignalWire webhook endpoint is active',
+            'timestamp': datetime.datetime.utcnow().isoformat()
+        })
+    
+    # POST request - process webhook
     data = request.form.to_dict()
+    
+    # Log incoming webhook for debugging
+    print(f"[WEBHOOK] Received: MessageSid={data.get('MessageSid')}, Status={data.get('MessageStatus')}")
     
     # Try Celery if available, otherwise process directly
     if CELERY_AVAILABLE:

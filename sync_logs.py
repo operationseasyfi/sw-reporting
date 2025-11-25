@@ -1,95 +1,323 @@
+#!/usr/bin/env python3
+"""
+SignalWire Message Sync Script
+Fetches historical message data from SignalWire API and stores in PostgreSQL.
+
+Usage:
+    python sync_logs.py              # Sync last 24 hours (default)
+    python sync_logs.py --hours 1    # Sync last 1 hour
+    python sync_logs.py --days 7     # Sync last 7 days
+    python sync_logs.py --test       # Test connection only
+"""
+
 import os
-import time
-import threading
-import queue
-import signal
 import sys
-from datetime import datetime, timedelta, date
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import argparse
+import signal
+import requests
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from signalwire.rest import Client as SignalWireClient
-from models import Session, SMSLog
-from sqlalchemy.exc import IntegrityError
-from tqdm import tqdm
-import logging
+from requests.auth import HTTPBasicAuth
 
-# Setup logging
-logging.basicConfig(filename='sync_debug.log', level=logging.ERROR, 
-                    format='%(asctime)s %(levelname)s:%(message)s')
-
+# Load environment variables
 load_dotenv()
 
-# Configuration
+# Configuration from environment
 PROJECT_ID = os.getenv('SIGNALWIRE_PROJECT_ID')
 AUTH_TOKEN = os.getenv('SIGNALWIRE_AUTH_TOKEN')
 SPACE_URL = os.getenv('SIGNALWIRE_SPACE_URL')
-MAX_WORKERS = 3  # Reduced to avoid rate limits (SignalWire has strict limits)
-MINUTES_TO_SYNC = 10  # Only sync last 10 minutes to avoid pulling millions
 
-if not all([PROJECT_ID, AUTH_TOKEN, SPACE_URL]):
-    print("Error: Please set SIGNALWIRE_PROJECT_ID, SIGNALWIRE_AUTH_TOKEN, and SIGNALWIRE_SPACE_URL in .env file")
-    exit(1)
+def print_config():
+    """Print current configuration (masked for security)"""
+    print("\n=== CONFIGURATION ===")
+    print(f"Project ID: {PROJECT_ID[:8]}...{PROJECT_ID[-4:] if PROJECT_ID and len(PROJECT_ID) > 12 else 'NOT SET'}")
+    print(f"Auth Token: {'*' * 8}...{AUTH_TOKEN[-4:] if AUTH_TOKEN and len(AUTH_TOKEN) > 4 else 'NOT SET'}")
+    print(f"Space URL:  {SPACE_URL or 'NOT SET'}")
+    print("=" * 30)
 
-# Queue for database writes
-write_queue = queue.Queue()
-stop_flag = threading.Event()  # Thread-safe flag for graceful shutdown
-
-def get_client():
-    return SignalWireClient(PROJECT_ID, AUTH_TOKEN, signalwire_space_url=SPACE_URL)
-
-def db_writer():
-    """
-    Dedicated thread to write to Postgres.
-    Serializes writes to avoid connection pool exhaustion.
-    """
-    session = Session()
-    batch = []
-    batch_size = 500
+def validate_config():
+    """Validate that all required config is present"""
+    missing = []
+    if not PROJECT_ID:
+        missing.append("SIGNALWIRE_PROJECT_ID")
+    if not AUTH_TOKEN:
+        missing.append("SIGNALWIRE_AUTH_TOKEN")
+    if not SPACE_URL:
+        missing.append("SIGNALWIRE_SPACE_URL")
     
-    while not stop_flag.is_set():
-        try:
-            # Use timeout so we can check stop_flag periodically
-            item = write_queue.get(timeout=1.0)
-            if item is None:  # Sentinel to stop
-                if batch:
-                    save_batch(session, batch)
-                break
-            
-            batch.append(item)
-            
-            if len(batch) >= batch_size:
-                save_batch(session, batch)
-                batch = []
-        except queue.Empty:
-            # Timeout - check if we should stop
-            if stop_flag.is_set():
-                if batch:
-                    save_batch(session, batch)
-                break
-            continue
-            
-    session.close()
+    if missing:
+        print(f"\n❌ ERROR: Missing required environment variables:")
+        for var in missing:
+            print(f"   - {var}")
+        print("\nPlease set these in your .env file:")
+        print("   SIGNALWIRE_PROJECT_ID=your-project-id")
+        print("   SIGNALWIRE_AUTH_TOKEN=your-auth-token")
+        print("   SIGNALWIRE_SPACE_URL=your-space.signalwire.com")
+        return False
+    return True
 
-def save_batch(session, batch):
-    """Bulk upsert using PostgreSQL's ON CONFLICT for high performance"""
-    if not batch:
-        return
+def get_api_base_url():
+    """Get the SignalWire API base URL"""
+    # Remove protocol if present
+    space = SPACE_URL.replace('https://', '').replace('http://', '')
+    return f"https://{space}/api/laml/2010-04-01/Accounts/{PROJECT_ID}"
+
+def api_request(endpoint, params=None):
+    """Make authenticated request to SignalWire API"""
+    url = f"{get_api_base_url()}{endpoint}"
+    auth = HTTPBasicAuth(PROJECT_ID, AUTH_TOKEN)
+    
+    try:
+        response = requests.get(url, auth=auth, params=params, timeout=120)  # 2 minute timeout
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.HTTPError as e:
+        print(f"❌ API Error: {e}")
+        print(f"   Response: {e.response.text if e.response else 'No response'}")
+        return None
+    except Exception as e:
+        print(f"❌ Request failed: {e}")
+        return None
+
+def test_connection():
+    """Test SignalWire API connection"""
+    print("\n🔍 Testing SignalWire connection...")
+    
+    # Try to fetch just a few messages
+    result = api_request("/Messages.json", params={'PageSize': 5})
+    
+    if result is None:
+        return False
+    
+    messages = result.get('messages', [])
+    
+    if len(messages) > 0:
+        msg = messages[0]
+        print(f"✅ Connection successful!")
+        print(f"   Found messages in account")
+        print(f"   Sample message SID: {msg.get('sid')}")
+        print(f"   Status: {msg.get('status')}")
+        print(f"   Date: {msg.get('date_created')}")
+        return True
+    else:
+        print("✅ Connection successful, but no messages found in account.")
+        return True
+
+def get_db_session():
+    """Get database session"""
+    try:
+        from models import Session
+        return Session()
+    except Exception as e:
+        print(f"❌ Failed to connect to database: {e}")
+        return None
+
+def parse_signalwire_date(date_str):
+    """Parse SignalWire date string to datetime"""
+    if not date_str:
+        return None
+    try:
+        # SignalWire format: "Mon, 25 Nov 2024 12:34:56 +0000"
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(date_str)
+    except:
+        try:
+            # Fallback ISO format
+            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        except:
+            return None
+
+def sync_messages(hours=24, days=None):
+    """
+    Sync messages from SignalWire to local database.
+    
+    Args:
+        hours: Number of hours to look back (default 24)
+        days: Number of days to look back (overrides hours if set)
+    """
+    from models import SMSLog
+    from sqlalchemy.dialects.postgresql import insert
+    import pytz
+    
+    # Calculate time window (use timezone-aware datetime)
+    if days:
+        lookback = timedelta(days=days)
+        period_desc = f"{days} day(s)"
+    else:
+        lookback = timedelta(hours=hours)
+        period_desc = f"{hours} hour(s)"
+    
+    start_time = datetime.now(pytz.UTC) - lookback
+    # Format for SignalWire API: YYYY-MM-DD
+    start_date_str = start_time.strftime('%Y-%m-%d')
+    
+    print(f"\n📥 Syncing messages from the last {period_desc}")
+    print(f"   Start date: {start_date_str}")
+    print(f"   Looking for messages after: {start_time.isoformat()}Z")
+    
+    # Get database session
+    session = get_db_session()
+    if not session:
+        return False
+    
+    # Track progress
+    total_fetched = 0
+    total_saved = 0
+    batch = []
+    batch_size = 100
+    page = 0
+    
+    # Handle Ctrl+C gracefully
+    stop_requested = False
+    def signal_handler(sig, frame):
+        nonlocal stop_requested
+        print("\n\n⚠️  Stop requested. Finishing current batch...")
+        stop_requested = True
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        print(f"\n🔄 Fetching messages from SignalWire...")
+        
+        next_page_uri = None
+        
+        while not stop_requested:
+            # Build request params
+            if next_page_uri:
+                # Use the next page URI directly with retry logic
+                url = f"https://{SPACE_URL.replace('https://', '').replace('http://', '')}{next_page_uri}"
+                auth = HTTPBasicAuth(PROJECT_ID, AUTH_TOKEN)
+                
+                # Retry up to 3 times on timeout
+                for attempt in range(3):
+                    try:
+                        response = requests.get(url, auth=auth, timeout=120)
+                        result = response.json() if response.ok else None
+                        break
+                    except requests.exceptions.ReadTimeout:
+                        if attempt < 2:
+                            print(f"\n   ⏳ Timeout on page {page+1}, retrying ({attempt+2}/3)...")
+                            time.sleep(2)
+                        else:
+                            print(f"\n   ❌ Page {page+1} timed out after 3 attempts")
+                            result = None
+                            break
+            else:
+                # First page - use date filter
+                params = {
+                    'PageSize': 100,
+                    'DateSent>': start_date_str
+                }
+                result = api_request("/Messages.json", params=params)
+            
+            if result is None:
+                print("❌ Failed to fetch messages")
+                break
+            
+            messages = result.get('messages', [])
+            next_page_uri = result.get('next_page_uri')
+            
+            if not messages:
+                break
+            
+            page += 1
+            
+            for msg in messages:
+                if stop_requested:
+                    break
+                
+                # Parse dates
+                date_created = parse_signalwire_date(msg.get('date_created'))
+                date_sent = parse_signalwire_date(msg.get('date_sent'))
+                
+                # Skip if before our start time (API filter is by date, not datetime)
+                # Make comparison timezone-aware
+                if date_created:
+                    # Ensure both datetimes are comparable (both aware or both naive)
+                    if date_created.tzinfo is None:
+                        import pytz
+                        date_created = pytz.UTC.localize(date_created)
+                    if date_created < start_time:
+                        continue
+                
+                total_fetched += 1
+                
+                # Parse error code
+                error_code = None
+                if msg.get('error_code'):
+                    try:
+                        error_code = int(msg.get('error_code'))
+                    except:
+                        pass
+                
+                # Parse price
+                price = 0.0
+                if msg.get('price'):
+                    try:
+                        price = abs(float(msg.get('price')))
+                    except:
+                        pass
+                
+                # Create record for upsert
+                record = {
+                    'id': msg.get('sid'),
+                    'date_created': date_created,
+                    'date_sent': date_sent,
+                    'to_number': msg.get('to'),
+                    'from_number': msg.get('from'),
+                    'status': msg.get('status'),
+                    'error_code': error_code,
+                    'error_message': msg.get('error_message'),
+                    'direction': msg.get('direction'),
+                    'price': price,
+                    'body': msg.get('body')[:500] if msg.get('body') else None
+                }
+                batch.append(record)
+                
+                # Save batch when full
+                if len(batch) >= batch_size:
+                    saved = save_batch(session, batch, SMSLog)
+                    total_saved += saved
+                    batch = []
+                    print(f"   Page {page}: Processed {total_fetched} messages, saved {total_saved}...", end='\r')
+            
+            # Small delay between pages to respect rate limits
+            time.sleep(0.1)
+            
+            # No more pages
+            if not next_page_uri:
+                break
+        
+        # Save any remaining records
+        if batch:
+            saved = save_batch(session, batch, SMSLog)
+            total_saved += saved
+        
+        print(f"\n\n✅ Sync complete!")
+        print(f"   Pages fetched: {page}")
+        print(f"   Total fetched: {total_fetched}")
+        print(f"   Total saved:   {total_saved}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Error during sync: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+        
+    finally:
+        session.close()
+
+def save_batch(session, records, SMSLog):
+    """Save a batch of records using upsert"""
+    if not records:
+        return 0
+    
     try:
         from sqlalchemy.dialects.postgresql import insert
-        
-        records = [{
-            'id': log.id,
-            'date_created': log.date_created,
-            'date_sent': log.date_sent,
-            'to_number': log.to_number,
-            'from_number': log.from_number,
-            'status': log.status,
-            'error_code': log.error_code,
-            'error_message': log.error_message,
-            'direction': log.direction,
-            'price': log.price,
-            'body': log.body
-        } for log in batch]
         
         stmt = insert(SMSLog).values(records)
         do_update = stmt.on_conflict_do_update(
@@ -98,120 +326,61 @@ def save_batch(session, batch):
                 'status': stmt.excluded.status,
                 'error_code': stmt.excluded.error_code,
                 'error_message': stmt.excluded.error_message,
-                'date_sent': stmt.excluded.date_sent
+                'date_sent': stmt.excluded.date_sent,
+                'price': stmt.excluded.price
             }
         )
         session.execute(do_update)
         session.commit()
+        return len(records)
+        
     except Exception as e:
         session.rollback()
-        logging.error(f"Database Error: {e}")
-        print(f"DB Error: {e}")
-
-def fetch_recent_messages(start_time, pbar):
-    """
-    Fetches logs for a specific time window using SignalWire API.
-    Uses proper pagination to handle large volumes efficiently.
-    """
-    client = get_client()
-    
-    try:
-        # SignalWire API: Use date_sent_after for time-based filtering
-        # The API handles pagination automatically when iterating
-        count = 0
-        page_size = 50  # SignalWire default page size
-        
-        # Use stream() which handles pagination automatically
-        # SignalWire rate limit: ~10 requests/second, so we add small delays
-        for msg in client.messages.stream(date_sent_after=start_time):
-            if stop_flag.is_set():
-                break
-                
-            log = SMSLog(
-                id=msg.sid,
-                date_created=msg.date_created,
-                date_sent=msg.date_sent,
-                to_number=msg.to,
-                from_number=msg.from_,
-                status=msg.status,
-                error_code=msg.error_code,
-                error_message=msg.error_message,
-                direction=msg.direction,
-                price=float(msg.price) if msg.price else 0.0,
-                body=msg.body
-            )
-            write_queue.put(log)
-            count += 1
-            pbar.update(1)
-            
-            # Rate limiting: SignalWire allows ~10 req/sec, so we add small delay
-            # every 50 messages (roughly 1 page)
-            if count % 50 == 0:
-                time.sleep(0.1)  # 100ms delay to stay under rate limit
-            
-        return count
-    except Exception as e:
-        logging.error(f"Error fetching messages: {e}")
-        print(f"Error: {e}")
+        print(f"\n⚠️  Batch save error: {e}")
         return 0
 
-def signal_handler(sig, frame):
-    """Handle Ctrl+C gracefully"""
-    print("\n\n⚠️  Interrupt received. Stopping sync gracefully...")
-    stop_flag.set()
-    # Put sentinel to wake up db_writer
-    try:
-        write_queue.put_nowait(None)
-    except queue.Full:
-        pass
-
 def main():
-    # Register signal handler for graceful shutdown
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    parser = argparse.ArgumentParser(description='Sync SignalWire messages to database')
+    parser.add_argument('--hours', type=int, default=24, help='Hours to look back (default: 24)')
+    parser.add_argument('--days', type=int, help='Days to look back (overrides --hours)')
+    parser.add_argument('--test', action='store_true', help='Test connection only')
+    parser.add_argument('--debug', action='store_true', help='Show debug info')
     
-    print(f"--- SIGNALWIRE SYNC ENGINE ---")
-    print(f"Syncing last {MINUTES_TO_SYNC} minutes of messages.")
-    print(f"Press Ctrl+C to stop gracefully.\n")
+    args = parser.parse_args()
     
-    # Calculate start time (10 minutes ago)
-    start_time = datetime.utcnow() - timedelta(minutes=MINUTES_TO_SYNC)
-    print(f"Fetching messages after: {start_time.isoformat()}")
+    print("=" * 50)
+    print("   SIGNALWIRE MESSAGE SYNC")
+    print("=" * 50)
     
-    # Start DB Writer Thread
-    writer_thread = threading.Thread(target=db_writer, daemon=False)
-    writer_thread.start()
+    # Always show config in debug mode
+    if args.debug:
+        print_config()
     
-    try:
-        with tqdm(desc="Fetching Messages", unit="msg", leave=True) as pbar:
-            # Single-threaded fetch to respect rate limits
-            # SignalWire has strict rate limits, parallel workers can cause issues
-            count = fetch_recent_messages(start_time, pbar)
-            
-            if stop_flag.is_set():
-                print("\n⚠️  Sync interrupted by user.")
-            else:
-                print(f"\n✅ Fetched {count} messages.")
+    # Validate configuration
+    if not validate_config():
+        sys.exit(1)
     
-    except KeyboardInterrupt:
-        print("\n⚠️  Interrupt received.")
-        stop_flag.set()
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        stop_flag.set()
-    finally:
-        # Stop writer thread
-        stop_flag.set()
-        try:
-            write_queue.put_nowait(None)
-        except queue.Full:
-            pass
-        
-        writer_thread.join(timeout=5)
-        if writer_thread.is_alive():
-            print("⚠️  Writer thread did not stop cleanly.")
-        else:
-            print("✅ Sync stopped cleanly.")
+    # Test mode
+    if args.test:
+        print_config()
+        success = test_connection()
+        sys.exit(0 if success else 1)
+    
+    # Test connection first
+    if not test_connection():
+        sys.exit(1)
+    
+    # Test database connection
+    print("\n🔍 Testing database connection...")
+    session = get_db_session()
+    if not session:
+        sys.exit(1)
+    print("✅ Database connection successful!")
+    session.close()
+    
+    # Run sync
+    success = sync_messages(hours=args.hours, days=args.days)
+    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     main()
