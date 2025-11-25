@@ -1,12 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-  PieChart, Pie
-} from 'recharts';
-import { 
   Activity, AlertTriangle, DollarSign, Users, RefreshCw, 
-  CheckCircle, XCircle, Clock, Search, Download, ChevronDown,
-  TrendingUp, MessageSquare, Filter
+  CheckCircle, XCircle, Download, MessageSquare, Filter,
+  Calendar, Database, Loader2, Cloud, ChevronRight
 } from 'lucide-react';
 
 // ============================================================================
@@ -64,12 +60,25 @@ interface OptOutStats {
   customRate: number;
 }
 
+interface DbStats {
+  total_messages: number;
+  oldest_message: string | null;
+  newest_message: string | null;
+}
+
 // ============================================================================
 // DATA FETCHING
 // ============================================================================
-const fetchStats = async (): Promise<Stats> => {
+const fetchStats = async (startDate?: string, endDate?: string): Promise<Stats> => {
   try {
-    const res = await fetch('/api/stats/overview');
+    let url = '/api/stats/overview';
+    if (startDate || endDate) {
+      const params = new URLSearchParams();
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      url += '?' + params.toString();
+    }
+    const res = await fetch(url);
     if (!res.ok) throw new Error();
     return res.json();
   } catch {
@@ -77,9 +86,16 @@ const fetchStats = async (): Promise<Stats> => {
   }
 };
 
-const fetchErrors = async (): Promise<ErrorStat[]> => {
+const fetchErrors = async (startDate?: string, endDate?: string): Promise<ErrorStat[]> => {
   try {
-    const res = await fetch('/api/stats/errors');
+    let url = '/api/stats/errors';
+    if (startDate || endDate) {
+      const params = new URLSearchParams();
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      url += '?' + params.toString();
+    }
+    const res = await fetch(url);
     if (!res.ok) throw new Error();
     return res.json();
   } catch {
@@ -111,13 +127,30 @@ const fetchMessages = async (startDate?: string, endDate?: string): Promise<Mess
   }
 };
 
-const fetchOptOuts = async (): Promise<OptOutStats> => {
+const fetchOptOuts = async (startDate?: string, endDate?: string): Promise<OptOutStats> => {
   try {
-    const res = await fetch('/api/stats/optouts');
+    let url = '/api/stats/optouts';
+    if (startDate || endDate) {
+      const params = new URLSearchParams();
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      url += '?' + params.toString();
+    }
+    const res = await fetch(url);
     if (!res.ok) throw new Error();
     return res.json();
   } catch {
     return { delivered: 0, defaultCount: 0, defaultRate: 0, customCount: 0, customRate: 0 };
+  }
+};
+
+const fetchDbStats = async (): Promise<DbStats | null> => {
+  try {
+    const res = await fetch('/api/db/stats');
+    if (!res.ok) throw new Error();
+    return res.json();
+  } catch {
+    return null;
   }
 };
 
@@ -129,48 +162,89 @@ export const Dashboard: React.FC = () => {
   const [errors, setErrors] = useState<ErrorStat[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [optouts, setOptouts] = useState<OptOutStats>({ delivered: 0, defaultCount: 0, defaultRate: 0, customCount: 0, customRate: 0 });
+  const [dbStats, setDbStats] = useState<DbStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  
+  // Date filter - default to today
+  const today = new Date().toISOString().split('T')[0];
+  const [startDate, setStartDate] = useState(today);
+  const [endDate, setEndDate] = useState(today);
+  const [activeDate, setActiveDate] = useState(today);
+  
+  // Sync state
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<string>('');
+  const [syncHours, setSyncHours] = useState(24);
+  const [syncResult, setSyncResult] = useState<{success: boolean; message: string} | null>(null);
 
-  // Load all data
-  const loadData = useCallback(async () => {
+  // Load all data with date filter
+  const loadData = useCallback(async (start?: string, end?: string) => {
     setLoading(true);
-    const [statsData, errorsData, messagesData, optoutsData] = await Promise.all([
-      fetchStats(),
-      fetchErrors(),
-      fetchMessages(),
-      fetchOptOuts()
+    const [statsData, errorsData, messagesData, optoutsData, dbStatsData] = await Promise.all([
+      fetchStats(start, end),
+      fetchErrors(start, end),
+      fetchMessages(start, end),
+      fetchOptOuts(start, end),
+      fetchDbStats()
     ]);
     setStats(statsData);
     setErrors(errorsData);
     setMessages(messagesData);
     setOptouts(optoutsData);
+    setDbStats(dbStatsData);
     setLastUpdate(new Date());
     setLoading(false);
   }, []);
 
-  // Filter messages by date
+  // Apply date filter
   const handleFilter = async () => {
     setMessagesLoading(true);
-    const data = await fetchMessages(startDate, endDate);
-    setMessages(data);
+    setActiveDate(startDate);
+    await loadData(startDate, endDate);
     setMessagesLoading(false);
+  };
+
+  // Sync from SignalWire
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncProgress('Connecting to SignalWire...');
+    setSyncResult(null);
+    
+    try {
+      setSyncProgress('Fetching messages from SignalWire API...');
+      
+      const res = await fetch(`/api/sync/trigger?hours=${syncHours}&limit=1000`);
+      const data = await res.json();
+      
+      if (data.error) {
+        setSyncResult({ success: false, message: data.error });
+      } else {
+        setSyncResult({ 
+          success: true, 
+          message: `Successfully fetched ${data.fetched} messages, saved ${data.saved} new messages to database.`
+        });
+        // Refresh the dashboard data
+        await loadData(startDate, endDate);
+        // Update db stats
+        const newDbStats = await fetchDbStats();
+        setDbStats(newDbStats);
+      }
+    } catch (error) {
+      setSyncResult({ success: false, message: 'Failed to connect to sync API' });
+    } finally {
+      setSyncing(false);
+      setSyncProgress('');
+    }
   };
 
   // Initial load
   useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  // Auto-refresh every 60 seconds
-  useEffect(() => {
-    const interval = setInterval(loadData, 60000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+    loadData(today, today);
+  }, []);
 
   // Filter messages by status
   const filteredMessages = statusFilter === 'all' 
@@ -195,7 +269,22 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  // Severity colors
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return '—';
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-US', { 
+        timeZone: 'America/Los_Angeles',
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
   const severityColor = (severity: string) => {
     switch (severity) {
       case 'critical': return 'bg-red-500';
@@ -219,24 +308,70 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* Header with Date Context */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
-          <p className="text-sm text-slate-500">
-            {lastUpdate ? `Last updated: ${lastUpdate.toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' })} PST` : 'Loading...'}
+          <p className="text-sm text-slate-500 mt-1">
+            <Calendar size={14} className="inline mr-1" />
+            Showing data for: <strong className="text-slate-700">{formatDate(activeDate)}</strong>
           </p>
+          {lastUpdate && (
+            <p className="text-xs text-slate-400 mt-1">
+              Last refreshed: {lastUpdate.toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' })} PST
+            </p>
+          )}
         </div>
-        <button
-          onClick={loadData}
-          disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg 
-                     hover:bg-blue-700 disabled:opacity-50 transition-colors font-medium"
-        >
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {/* SYNC BUTTON - Primary Action */}
+          <button
+            onClick={() => setSyncModalOpen(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 
+                       text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 
+                       shadow-lg shadow-blue-500/25 transition-all font-semibold"
+          >
+            <Cloud size={18} />
+            Sync from SignalWire
+          </button>
+          <button
+            onClick={() => loadData(startDate, endDate)}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 
+                       text-slate-700 rounded-xl hover:bg-slate-50 transition-colors font-medium"
+          >
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
+
+      {/* Database Status Banner */}
+      {dbStats && (
+        <div className="bg-gradient-to-r from-slate-50 to-slate-100 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm">
+              <Database size={20} className="text-slate-600" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-700">
+                Database: <strong className="text-slate-900">{dbStats.total_messages.toLocaleString()}</strong> messages
+              </p>
+              <p className="text-xs text-slate-500">
+                {dbStats.oldest_message && dbStats.newest_message 
+                  ? `From ${new Date(dbStats.oldest_message).toLocaleDateString()} to ${new Date(dbStats.newest_message).toLocaleDateString()}`
+                  : 'No messages yet'
+                }
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSyncModalOpen(true)}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+          >
+            Load more data <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -244,7 +379,7 @@ export const Dashboard: React.FC = () => {
           icon={<MessageSquare className="text-blue-600" />}
           label="Total Messages"
           value={stats.totalVolume.toLocaleString()}
-          subtext="Last 24 hours"
+          subtext={formatDate(activeDate)}
         />
         <KPICard 
           icon={<CheckCircle className="text-emerald-600" />}
@@ -264,7 +399,7 @@ export const Dashboard: React.FC = () => {
           icon={<DollarSign className="text-amber-600" />}
           label="Spend"
           value={`$${stats.spend.toFixed(2)}`}
-          subtext="Last 24 hours"
+          subtext="This period"
         />
         <KPICard 
           icon={<Users className="text-purple-600" />}
@@ -277,66 +412,76 @@ export const Dashboard: React.FC = () => {
       {/* Error Analysis + Opt-Out Stats */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Error Code Breakdown */}
-        <div className="card p-6">
-          <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
-            <AlertTriangle size={20} className="text-red-500" />
-            Error Code Breakdown
-          </h3>
-          {errors.length > 0 ? (
-            <div className="space-y-3">
-              {errors.map((err) => {
-                const info = ERROR_CODES[err.code] || { name: `Error ${err.code}`, description: 'Unknown error', severity: 'medium' };
-                return (
-                  <div key={err.code} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                    <div className={`w-3 h-3 rounded-full ${severityColor(info.severity)}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-slate-700">{err.code}</span>
-                        <span className="font-medium text-slate-800">{info.name}</span>
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="p-4 border-b border-slate-100">
+            <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-red-500" />
+              Error Code Breakdown
+              <span className="text-sm font-normal text-slate-400">({formatDate(activeDate)})</span>
+            </h3>
+          </div>
+          <div className="p-4">
+            {errors.length > 0 ? (
+              <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                {errors.map((err) => {
+                  const info = ERROR_CODES[err.code] || { name: `Error ${err.code}`, description: 'Unknown error', severity: 'medium' };
+                  return (
+                    <div key={err.code} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors">
+                      <div className={`w-3 h-3 rounded-full ${severityColor(info.severity)}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-slate-700">{err.code}</span>
+                          <span className="font-medium text-slate-800">{info.name}</span>
+                        </div>
+                        <p className="text-sm text-slate-500 truncate">{info.description}</p>
                       </div>
-                      <p className="text-sm text-slate-500 truncate">{info.description}</p>
+                      <div className="text-right">
+                        <div className="text-xl font-bold text-slate-800">{err.count.toLocaleString()}</div>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-slate-800">{err.count.toLocaleString()}</div>
-                      <div className="text-xs text-slate-400">occurrences</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-slate-400">
-              <CheckCircle size={32} className="mx-auto mb-2 text-emerald-400" />
-              <p>No errors detected</p>
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-slate-400">
+                <CheckCircle size={40} className="mx-auto mb-2 text-emerald-400" />
+                <p className="font-medium">No errors detected</p>
+                <p className="text-sm">All messages delivered successfully</p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Opt-Out Stats */}
-        <div className="card p-6">
-          <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
-            <Activity size={20} className="text-blue-500" />
-            Opt-Out Rates
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-blue-50 rounded-xl p-4">
-              <div className="text-sm text-blue-600 font-medium mb-1">Standard Opt-Outs</div>
-              <div className="text-3xl font-bold text-blue-700">{optouts.defaultRate.toFixed(2)}%</div>
-              <div className="text-sm text-blue-500 mt-1">
-                {optouts.defaultCount.toLocaleString()} STOP/UNSUBSCRIBE
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="p-4 border-b border-slate-100">
+            <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+              <Activity size={20} className="text-blue-500" />
+              Opt-Out Rates
+              <span className="text-sm font-normal text-slate-400">({formatDate(activeDate)})</span>
+            </h3>
+          </div>
+          <div className="p-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-blue-50 rounded-xl p-5">
+                <div className="text-sm text-blue-600 font-medium mb-2">Standard Opt-Outs</div>
+                <div className="text-4xl font-bold text-blue-700">{optouts.defaultRate.toFixed(2)}%</div>
+                <div className="text-sm text-blue-500 mt-2">
+                  {optouts.defaultCount.toLocaleString()} STOP/UNSUBSCRIBE
+                </div>
+                <div className="text-xs text-blue-400 mt-1">
+                  of {optouts.delivered.toLocaleString()} delivered
+                </div>
               </div>
-              <div className="text-xs text-blue-400 mt-2">
-                of {optouts.delivered.toLocaleString()} delivered
-              </div>
-            </div>
-            <div className="bg-amber-50 rounded-xl p-4">
-              <div className="text-sm text-amber-600 font-medium mb-1">Custom Opt-Outs</div>
-              <div className="text-3xl font-bold text-amber-700">{optouts.customRate.toFixed(2)}%</div>
-              <div className="text-sm text-amber-500 mt-1">
-                {optouts.customCount.toLocaleString()} custom keywords
-              </div>
-              <div className="text-xs text-amber-400 mt-2">
-                Extended keyword matching
+              <div className="bg-amber-50 rounded-xl p-5">
+                <div className="text-sm text-amber-600 font-medium mb-2">Custom Opt-Outs</div>
+                <div className="text-4xl font-bold text-amber-700">{optouts.customRate.toFixed(2)}%</div>
+                <div className="text-sm text-amber-500 mt-2">
+                  {optouts.customCount.toLocaleString()} custom keywords
+                </div>
+                <div className="text-xs text-amber-400 mt-1">
+                  Extended keyword matching
+                </div>
               </div>
             </div>
           </div>
@@ -344,7 +489,7 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* Message Feed */}
-      <div className="card">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
         <div className="p-4 border-b border-slate-100">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
@@ -357,7 +502,6 @@ export const Dashboard: React.FC = () => {
             
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-3">
-              {/* Status Filter */}
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
@@ -372,7 +516,6 @@ export const Dashboard: React.FC = () => {
                 <option value="received">Received</option>
               </select>
 
-              {/* Date Range */}
               <div className="flex items-center gap-2">
                 <input
                   type="date"
@@ -395,8 +538,8 @@ export const Dashboard: React.FC = () => {
                   className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg
                              hover:bg-slate-900 disabled:opacity-50 text-sm font-medium"
                 >
-                  <Filter size={14} />
-                  {messagesLoading ? 'Loading...' : 'Filter'}
+                  {messagesLoading ? <Loader2 size={14} className="animate-spin" /> : <Filter size={14} />}
+                  Apply
                 </button>
               </div>
             </div>
@@ -421,7 +564,9 @@ export const Dashboard: React.FC = () => {
               {filteredMessages.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
-                    No messages found. Try adjusting your filters.
+                    <MessageSquare size={40} className="mx-auto mb-2 opacity-30" />
+                    <p className="font-medium">No messages found</p>
+                    <p className="text-sm">Try syncing more data from SignalWire</p>
                   </td>
                 </tr>
               ) : (
@@ -464,18 +609,113 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Info Banner */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
-        <Activity className="text-blue-500 mt-0.5" size={20} />
-        <div>
-          <p className="text-sm text-blue-800 font-medium">
-            Currently showing {messages.length} messages from your database.
-          </p>
-          <p className="text-sm text-blue-600 mt-1">
-            Run <code className="bg-blue-100 px-1 rounded">python sync_logs.py --hours 24</code> to pull more messages from SignalWire.
-          </p>
+      {/* SYNC MODAL */}
+      {syncModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+            <div className="p-6 border-b border-slate-100">
+              <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <Cloud className="text-blue-600" />
+                Sync Data from SignalWire
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Pull message history directly from SignalWire API into your database.
+              </p>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              {/* Time Range Selection */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  How far back to sync?
+                </label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[1, 6, 12, 24].map((h) => (
+                    <button
+                      key={h}
+                      onClick={() => setSyncHours(h)}
+                      className={`py-2 px-3 rounded-lg text-sm font-medium transition-colors
+                        ${syncHours === h 
+                          ? 'bg-blue-600 text-white' 
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                    >
+                      {h} {h === 1 ? 'hour' : 'hours'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Progress */}
+              {syncing && (
+                <div className="bg-blue-50 rounded-xl p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <Loader2 size={20} className="animate-spin text-blue-600" />
+                    <span className="font-medium text-blue-800">Syncing in progress...</span>
+                  </div>
+                  <p className="text-sm text-blue-600">{syncProgress}</p>
+                  <div className="mt-3 h-2 bg-blue-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-600 rounded-full animate-pulse" style={{ width: '60%' }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Result */}
+              {syncResult && (
+                <div className={`rounded-xl p-4 ${syncResult.success ? 'bg-emerald-50' : 'bg-red-50'}`}>
+                  <div className="flex items-center gap-2">
+                    {syncResult.success 
+                      ? <CheckCircle className="text-emerald-600" size={20} />
+                      : <XCircle className="text-red-600" size={20} />
+                    }
+                    <span className={`font-medium ${syncResult.success ? 'text-emerald-800' : 'text-red-800'}`}>
+                      {syncResult.success ? 'Sync Complete!' : 'Sync Failed'}
+                    </span>
+                  </div>
+                  <p className={`text-sm mt-1 ${syncResult.success ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {syncResult.message}
+                  </p>
+                </div>
+              )}
+
+              {/* Info */}
+              <div className="bg-slate-50 rounded-xl p-4 text-sm text-slate-600">
+                <p><strong>Note:</strong> This will fetch up to 1,000 messages from SignalWire. 
+                For larger syncs, use the command line:</p>
+                <code className="block mt-2 bg-slate-200 px-3 py-2 rounded text-xs font-mono">
+                  python sync_logs.py --hours {syncHours}
+                </code>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+              <button
+                onClick={() => setSyncModalOpen(false)}
+                className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-xl
+                           hover:bg-blue-700 disabled:opacity-50 font-semibold"
+              >
+                {syncing ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Syncing...
+                  </>
+                ) : (
+                  <>
+                    <Download size={16} />
+                    Start Sync
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
@@ -490,13 +730,15 @@ const KPICard = ({ icon, label, value, subtext, highlight }: {
   subtext: string;
   highlight?: 'green' | 'red';
 }) => (
-  <div className={`card p-5 ${highlight === 'green' ? 'border-emerald-200 bg-emerald-50/50' : 
-                              highlight === 'red' ? 'border-red-200 bg-red-50/50' : ''}`}>
+  <div className={`bg-white border rounded-xl p-5 shadow-sm ${
+    highlight === 'green' ? 'border-emerald-200 bg-emerald-50/30' : 
+    highlight === 'red' ? 'border-red-200 bg-red-50/30' : 'border-slate-200'
+  }`}>
     <div className="flex items-center gap-3 mb-3">
       {icon}
       <span className="text-sm font-medium text-slate-500">{label}</span>
     </div>
-    <div className="text-2xl font-bold text-slate-800">{value}</div>
+    <div className="text-3xl font-bold text-slate-800">{value}</div>
     <div className="text-sm text-slate-400 mt-1">{subtext}</div>
   </div>
 );

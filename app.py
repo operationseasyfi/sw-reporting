@@ -176,13 +176,31 @@ def signalwire_webhook():
 @app.route('/api/stats/overview')
 @requires_auth
 def get_overview_stats():
-    """Main dashboard KPIs"""
+    """Main dashboard KPIs with optional date filtering"""
     if not MODELS_AVAILABLE:
         return jsonify({'error': 'Database unavailable'}), 503
 
     session = Session()
     try:
-        window = get_time_window(24)
+        # Date filtering
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if start_date:
+            try:
+                start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+            except:
+                start_dt = get_time_window(24)
+        else:
+            start_dt = get_time_window(24)
+        
+        if end_date:
+            try:
+                end_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+            except:
+                end_dt = datetime.datetime.utcnow()
+        else:
+            end_dt = datetime.datetime.utcnow()
         
         # Use efficient single query with conditional aggregation
         stats = session.execute(text("""
@@ -195,8 +213,8 @@ def get_overview_stats():
                 AVG(EXTRACT(EPOCH FROM (date_sent - date_created)) * 1000) 
                     FILTER (WHERE date_sent IS NOT NULL) as avg_latency
             FROM sms_logs 
-            WHERE date_created >= :window
-        """), {'window': window}).fetchone()
+            WHERE date_created >= :start_dt AND date_created < :end_dt
+        """), {'start_dt': start_dt, 'end_dt': end_dt}).fetchone()
         
         total = stats[0] or 0
         delivered = stats[1] or 0
@@ -221,7 +239,7 @@ def get_overview_stats():
 @requires_auth
 def get_optout_stats():
     """
-    Two separate opt-out meters:
+    Two separate opt-out meters with date filtering:
     1. Default: STOP, UNSUBSCRIBE (standard carrier keywords)
     2. Custom: User-defined keywords for edge cases
     """
@@ -230,11 +248,30 @@ def get_optout_stats():
 
     session = Session()
     try:
-        window = get_time_window(24)
+        # Date filtering
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if start_date:
+            try:
+                start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+            except:
+                start_dt = get_time_window(24)
+        else:
+            start_dt = get_time_window(24)
+        
+        if end_date:
+            try:
+                end_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+            except:
+                end_dt = datetime.datetime.utcnow()
+        else:
+            end_dt = datetime.datetime.utcnow()
         
         # Count delivered outbound messages
         delivered = session.query(func.count(SMSLog.id)).filter(
-            SMSLog.date_created >= window,
+            SMSLog.date_created >= start_dt,
+            SMSLog.date_created < end_dt,
             SMSLog.direction == 'outbound-api',
             SMSLog.status.in_(['delivered', 'sent'])
         ).scalar() or 0
@@ -244,7 +281,8 @@ def get_optout_stats():
         default_count = 0
         if default_filter is not None:
             default_count = session.query(func.count(SMSLog.id)).filter(
-                SMSLog.date_created >= window,
+                SMSLog.date_created >= start_dt,
+                SMSLog.date_created < end_dt,
                 SMSLog.direction == 'inbound',
                 SMSLog.body.isnot(None),
                 default_filter
@@ -255,7 +293,8 @@ def get_optout_stats():
         custom_count = 0
         if custom_filter is not None:
             custom_count = session.query(func.count(SMSLog.id)).filter(
-                SMSLog.date_created >= window,
+                SMSLog.date_created >= start_dt,
+                SMSLog.date_created < end_dt,
                 SMSLog.direction == 'inbound',
                 SMSLog.body.isnot(None),
                 custom_filter
@@ -281,20 +320,41 @@ def get_optout_stats():
 @app.route('/api/stats/errors')
 @requires_auth
 def get_error_stats():
-    """Top error codes with severity classification"""
+    """Top error codes with severity classification and date filtering"""
     if not MODELS_AVAILABLE:
         return jsonify([]), 503
     
     session = Session()
     try:
+        # Date filtering
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if start_date:
+            try:
+                start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+            except:
+                start_dt = get_time_window(24)
+        else:
+            start_dt = get_time_window(24)
+        
+        if end_date:
+            try:
+                end_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+            except:
+                end_dt = datetime.datetime.utcnow()
+        else:
+            end_dt = datetime.datetime.utcnow()
+        
         results = session.execute(text("""
             SELECT error_code, COUNT(*) as cnt
             FROM sms_logs 
             WHERE error_code IS NOT NULL
+              AND date_created >= :start_dt AND date_created < :end_dt
             GROUP BY error_code
             ORDER BY cnt DESC
             LIMIT 10
-        """)).fetchall()
+        """), {'start_dt': start_dt, 'end_dt': end_dt}).fetchall()
         
         def get_severity(count):
             if count >= 500: return 'critical'
@@ -521,6 +581,7 @@ def trigger_sync():
     """
     Trigger a sync from SignalWire API.
     This pulls recent messages directly from SignalWire and stores them.
+    Supports pagination to fetch multiple pages.
     """
     import requests
     from requests.auth import HTTPBasicAuth
@@ -537,33 +598,65 @@ def trigger_sync():
     base_url = f"https://{space}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Messages.json"
     
     hours = int(request.args.get('hours', 1))
-    limit = min(int(request.args.get('limit', 500)), 1000)
+    max_messages = min(int(request.args.get('limit', 1000)), 2000)
     
     # Calculate date range
     start_time = datetime.datetime.utcnow() - timedelta(hours=hours)
     
     try:
-        # Fetch from SignalWire
         auth = HTTPBasicAuth(PROJECT_ID, AUTH_TOKEN)
+        all_messages = []
+        next_page_uri = None
+        page_count = 0
+        max_pages = 10  # Safety limit
+        
+        # Initial request
         params = {
-            'PageSize': min(limit, 100),
+            'PageSize': 100,
             'DateSent>': start_time.strftime('%Y-%m-%d')
         }
         
-        response = requests.get(base_url, auth=auth, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+        while page_count < max_pages and len(all_messages) < max_messages:
+            if next_page_uri:
+                # Use the full next_page_uri for pagination
+                full_url = f"https://{space}{next_page_uri}"
+                response = requests.get(full_url, auth=auth, timeout=60)
+            else:
+                response = requests.get(base_url, auth=auth, params=params, timeout=60)
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            messages = data.get('messages', [])
+            if not messages:
+                break
+            
+            all_messages.extend(messages)
+            page_count += 1
+            
+            # Check for next page
+            next_page_uri = data.get('next_page_uri')
+            if not next_page_uri:
+                break
         
-        messages = data.get('messages', [])
         saved_count = 0
+        skipped_count = 0
         
-        if MODELS_AVAILABLE and messages:
+        if MODELS_AVAILABLE and all_messages:
             session = Session()
             try:
-                for msg in messages:
-                    # Check if exists
-                    existing = session.query(SMSLog).filter(SMSLog.id == msg['sid']).first()
-                    if not existing:
+                # Get existing IDs in bulk
+                sids = [msg['sid'] for msg in all_messages]
+                existing_ids = set(
+                    row[0] for row in session.query(SMSLog.id).filter(SMSLog.id.in_(sids)).all()
+                )
+                
+                for msg in all_messages:
+                    if msg['sid'] in existing_ids:
+                        skipped_count += 1
+                        continue
+                        
+                    try:
                         log = SMSLog(
                             id=msg['sid'],
                             date_created=datetime.datetime.fromisoformat(msg['date_created'].replace('Z', '+00:00')) if msg.get('date_created') else None,
@@ -579,19 +672,24 @@ def trigger_sync():
                         )
                         session.add(log)
                         saved_count += 1
+                    except Exception as e:
+                        print(f"Error parsing message {msg['sid']}: {e}")
                 
                 session.commit()
             except Exception as e:
                 session.rollback()
                 print(f"Error saving messages: {e}")
+                return jsonify({'error': f'Database error: {str(e)}'}), 500
             finally:
                 session.close()
         
         return jsonify({
             'success': True,
-            'fetched': len(messages),
+            'fetched': len(all_messages),
             'saved': saved_count,
-            'message': f'Fetched {len(messages)} messages, saved {saved_count} new'
+            'skipped': skipped_count,
+            'pages': page_count,
+            'message': f'Fetched {len(all_messages)} messages from {page_count} pages, saved {saved_count} new (skipped {skipped_count} existing)'
         })
         
     except requests.exceptions.RequestException as e:
