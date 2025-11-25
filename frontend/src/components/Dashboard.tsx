@@ -36,7 +36,7 @@ interface LatencyStats {
 }
 
 // ============================================================================
-// DATA FETCHING (Optimized with error handling)
+// DATA FETCHING
 // ============================================================================
 
 const fetchJSON = async <T,>(url: string, fallback: T): Promise<T> => {
@@ -50,8 +50,12 @@ const fetchJSON = async <T,>(url: string, fallback: T): Promise<T> => {
   }
 };
 
-const fetchLogs = (): Promise<LogEntry[]> => 
-  fetchJSON<any>('/api/logs_dt?draw=1&start=0&length=30', { data: [] })
+const fetchLogs = (startDate?: string, endDate?: string, limit: number = 100): Promise<LogEntry[]> => {
+  let url = `/api/logs_dt?draw=1&start=0&length=${limit}`;
+  if (startDate) url += `&start_date=${startDate}`;
+  if (endDate) url += `&end_date=${endDate}`;
+  
+  return fetchJSON<any>(url, { data: [] })
     .then(data => data.data?.map((row: any) => ({
       id: row.id,
       timestamp: row.date_created,
@@ -68,6 +72,7 @@ const fetchLogs = (): Promise<LogEntry[]> =>
       cost: row.price || 0,
       body: row.body
     })) || []);
+};
 
 const fetchTimeSeries = (): Promise<TimeSeriesPoint[]> =>
   fetchJSON<Record<string, any>>('/api/stats/timeseries', {})
@@ -103,7 +108,6 @@ const fetchLatencyStats = (): Promise<LatencyStats> =>
 export const Dashboard: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [chartData, setChartData] = useState<TimeSeriesPoint[]>([]);
-  const [paused, setPaused] = useState(false);
   const [hoveredCluster, setHoveredCluster] = useState<ErrorCluster | null>(null);
   const [errorClusters, setErrorClusters] = useState<ErrorCluster[]>([]);
   const [overview, setOverview] = useState<OverviewStats>({
@@ -116,44 +120,52 @@ export const Dashboard: React.FC = () => {
   });
   const [latencyStats, setLatencyStats] = useState<LatencyStats>({ p50: 0, p95: 0, p99: 0, samples: 0 });
   const [loading, setLoading] = useState(true);
+  const [logsLoading, setLogsLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
-  const loadAllData = useCallback(async () => {
+  // Load dashboard stats
+  const loadStats = useCallback(async () => {
     setLoading(true);
-    const [series, clusters, overviewData, optoutData, latencyData, logsData] = await Promise.all([
+    const [series, clusters, overviewData, optoutData, latencyData] = await Promise.all([
       fetchTimeSeries(),
       fetchErrorClusters(),
       fetchOverview(),
       fetchOptOuts(),
-      fetchLatencyStats(),
-      fetchLogs()
+      fetchLatencyStats()
     ]);
     setChartData(series);
     setErrorClusters(clusters);
     setOverview(overviewData);
     setOptouts(optoutData);
     setLatencyStats(latencyData);
-    setLogs(logsData);
     setLastUpdate(new Date());
     setLoading(false);
   }, []);
 
-  // Initial load + periodic refresh
-  useEffect(() => {
-    loadAllData();
-    const interval = setInterval(loadAllData, 30000);
-    return () => clearInterval(interval);
-  }, [loadAllData]);
+  // Load logs with optional date filter
+  const loadLogs = useCallback(async (startDate?: string, endDate?: string) => {
+    setLogsLoading(true);
+    const logsData = await fetchLogs(startDate, endDate, 100);
+    setLogs(logsData);
+    setLogsLoading(false);
+  }, []);
 
-  // Faster log refresh when not paused
+  // Handle date filter from LogStream
+  const handleDateFilter = useCallback((startDate: string, endDate: string) => {
+    loadLogs(startDate, endDate);
+  }, [loadLogs]);
+
+  // Initial load
   useEffect(() => {
-    if (paused) return;
-    const interval = setInterval(async () => {
-      const newLogs = await fetchLogs();
-      if (newLogs.length > 0) setLogs(newLogs);
-    }, 8000);
+    loadStats();
+    loadLogs();
+  }, [loadStats, loadLogs]);
+
+  // Periodic refresh of stats (not logs - those are fetched on demand)
+  useEffect(() => {
+    const interval = setInterval(loadStats, 60000); // Refresh stats every minute
     return () => clearInterval(interval);
-  }, [paused]);
+  }, [loadStats]);
 
   // Treemap custom renderer
   const TreemapCell = (props: any) => {
@@ -199,11 +211,11 @@ export const Dashboard: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-white tracking-tight">SignalWire Analytics</h1>
           <p className="text-xs text-gray-500 font-mono">
-            {lastUpdate ? `Last updated: ${lastUpdate.toLocaleTimeString()}` : 'Loading...'}
+            {lastUpdate ? `Last updated: ${lastUpdate.toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' })} PST` : 'Loading...'}
           </p>
         </div>
         <button
-          onClick={loadAllData}
+          onClick={() => { loadStats(); loadLogs(); }}
           disabled={loading}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 
                      text-sm text-gray-300 hover:text-white transition-all disabled:opacity-50"
@@ -291,7 +303,7 @@ export const Dashboard: React.FC = () => {
         )}
       </section>
 
-      {/* OPT-OUT METERS (TWO SEPARATE) + LATENCY */}
+      {/* OPT-OUT METERS + LATENCY */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <OptOutMeter
           title="Standard Opt-Outs"
@@ -316,9 +328,13 @@ export const Dashboard: React.FC = () => {
         <LatencyCard stats={latencyStats} />
       </div>
 
-      {/* LIVE FEED */}
-      <section className="flex-1 min-h-[350px]">
-        <LogStream logs={logs} paused={paused} setPaused={setPaused} />
+      {/* MESSAGE FEED */}
+      <section className="flex-1 min-h-[400px]">
+        <LogStream 
+          logs={logs} 
+          onDateFilter={handleDateFilter}
+          loading={logsLoading}
+        />
       </section>
     </div>
   );

@@ -396,7 +396,7 @@ def get_latency_stats():
 @app.route('/api/logs_dt')
 @requires_auth
 def get_logs_datatable():
-    """Paginated message logs for live feed"""
+    """Paginated message logs with date filtering"""
     if not MODELS_AVAILABLE:
         return jsonify({'draw': 1, 'recordsTotal': 0, 'recordsFiltered': 0, 'data': []})
     
@@ -404,17 +404,41 @@ def get_logs_datatable():
     try:
         draw = int(request.args.get('draw', 1))
         start = int(request.args.get('start', 0))
-        length = min(int(request.args.get('length', 50)), 100)  # Cap at 100
+        length = min(int(request.args.get('length', 100)), 500)  # Allow up to 500
         
-        # Efficient query with limit
-        logs = session.query(SMSLog)\
-            .order_by(SMSLog.date_created.desc())\
+        # Date filtering
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        # Build query
+        query = session.query(SMSLog)
+        
+        # Apply date filters if provided
+        if start_date:
+            try:
+                from datetime import datetime
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                query = query.filter(SMSLog.date_created >= start_dt)
+            except:
+                pass
+        
+        if end_date:
+            try:
+                from datetime import datetime
+                # Add 1 day to include the end date fully
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+                query = query.filter(SMSLog.date_created < end_dt)
+            except:
+                pass
+        
+        # Order and paginate
+        logs = query.order_by(SMSLog.date_created.desc())\
             .offset(start)\
             .limit(length)\
             .all()
         
-        # Get total count (cached for performance)
-        total = session.execute(text("SELECT COUNT(*) FROM sms_logs")).scalar()
+        # Get filtered count
+        total = query.count()
         
         data = [{
             'id': log.id,
@@ -426,7 +450,7 @@ def get_logs_datatable():
             'error_code': log.error_code,
             'error_message': log.error_message,
             'direction': log.direction,
-            'body': log.body[:100] if log.body else None,  # Truncate for performance
+            'body': log.body[:160] if log.body else None,  # Show more of message
             'price': float(log.price) if log.price else 0
         } for log in logs]
         
