@@ -650,6 +650,20 @@ def trigger_sync():
         skipped_count = 0
         hit_limit = page_count >= max_pages
         
+        # Helper function to parse SignalWire date format (RFC 2822)
+        def parse_signalwire_date(date_str):
+            if not date_str:
+                return None
+            try:
+                from email.utils import parsedate_to_datetime
+                return parsedate_to_datetime(date_str)
+            except:
+                try:
+                    # Fallback to ISO format
+                    return datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                except:
+                    return None
+        
         if MODELS_AVAILABLE and all_messages:
             session = Session()
             try:
@@ -667,8 +681,8 @@ def trigger_sync():
                     try:
                         log = SMSLog(
                             id=msg['sid'],
-                            date_created=datetime.datetime.fromisoformat(msg['date_created'].replace('Z', '+00:00')) if msg.get('date_created') else None,
-                            date_sent=datetime.datetime.fromisoformat(msg['date_sent'].replace('Z', '+00:00')) if msg.get('date_sent') else None,
+                            date_created=parse_signalwire_date(msg.get('date_created')),
+                            date_sent=parse_signalwire_date(msg.get('date_sent')),
                             to_number=msg.get('to'),
                             from_number=msg.get('from'),
                             status=msg.get('status'),
