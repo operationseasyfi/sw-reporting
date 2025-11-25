@@ -575,59 +575,66 @@ def get_alerts():
 # SIGNALWIRE DIRECT FETCH (for real-time data)
 # ============================================================================
 
-@app.route('/api/sync/trigger')
-@requires_auth
-def trigger_sync():
-    """
-    Trigger a sync from SignalWire API.
-    This pulls recent messages directly from SignalWire and stores them.
-    Supports pagination to fetch multiple pages.
-    """
+import threading
+import time as time_module
+
+# Global sync state for background processing
+sync_state = {
+    'running': False,
+    'progress': '',
+    'pages': 0,
+    'fetched': 0,
+    'saved': 0,
+    'skipped': 0,
+    'error': None,
+    'complete': False
+}
+sync_lock = threading.Lock()
+
+def background_sync(hours, space, base_url, auth, start_time):
+    """Background sync function that runs in a separate thread"""
+    global sync_state
     import requests
-    from requests.auth import HTTPBasicAuth
-    
-    PROJECT_ID = os.getenv('SIGNALWIRE_PROJECT_ID')
-    AUTH_TOKEN = os.getenv('SIGNALWIRE_AUTH_TOKEN')
-    SPACE_URL = os.getenv('SIGNALWIRE_SPACE_URL', '')
-    
-    if not all([PROJECT_ID, AUTH_TOKEN, SPACE_URL]):
-        return jsonify({'error': 'SignalWire credentials not configured'}), 500
-    
-    # Clean up space URL
-    space = SPACE_URL.replace('https://', '').replace('http://', '').rstrip('/')
-    base_url = f"https://{space}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Messages.json"
-    
-    hours = int(request.args.get('hours', 1))
-    
-    # Calculate date range - use proper datetime format
-    start_time = datetime.datetime.utcnow() - timedelta(hours=hours)
     
     try:
-        auth = HTTPBasicAuth(PROJECT_ID, AUTH_TOKEN)
         all_messages = []
         next_page_uri = None
         page_count = 0
-        # No artificial limit - fetch ALL messages in the time range
-        # Set very high safety limit (500k messages = 5000 pages)
-        max_pages = 5000
         
-        # Initial request - SignalWire API uses DateSent> with YYYY-MM-DD format
-        # Note: This filters by date, not exact time, so we may get messages slightly before the exact hour mark
         params = {
             'PageSize': 100,
             'DateSent>': start_time.strftime('%Y-%m-%d')
         }
         
-        while page_count < max_pages:
-            if next_page_uri:
-                # Use the full next_page_uri for pagination
-                full_url = f"https://{space}{next_page_uri}"
-                response = requests.get(full_url, auth=auth, timeout=60)
-            else:
-                response = requests.get(base_url, auth=auth, params=params, timeout=60)
+        # Fetch ALL pages - no limit
+        while True:
+            with sync_lock:
+                if not sync_state['running']:
+                    break  # Cancelled
+                sync_state['progress'] = f'Fetching page {page_count + 1}...'
             
-            response.raise_for_status()
-            data = response.json()
+            try:
+                if next_page_uri:
+                    full_url = f"https://{space}{next_page_uri}"
+                    response = requests.get(full_url, auth=auth, timeout=60)
+                else:
+                    response = requests.get(base_url, auth=auth, params=params, timeout=60)
+                
+                content_type = response.headers.get('content-type', '')
+                if 'application/json' not in content_type:
+                    with sync_lock:
+                        sync_state['error'] = f'SignalWire returned non-JSON response'
+                        sync_state['running'] = False
+                    return
+                
+                response.raise_for_status()
+                data = response.json()
+                
+            except Exception as e:
+                with sync_lock:
+                    sync_state['error'] = f'API error: {str(e)}'
+                    sync_state['running'] = False
+                return
             
             messages = data.get('messages', [])
             if not messages:
@@ -636,19 +643,24 @@ def trigger_sync():
             all_messages.extend(messages)
             page_count += 1
             
-            # Check for next page
+            with sync_lock:
+                sync_state['pages'] = page_count
+                sync_state['fetched'] = len(all_messages)
+                sync_state['progress'] = f'Fetched {len(all_messages):,} messages from {page_count} pages...'
+            
             next_page_uri = data.get('next_page_uri')
             if not next_page_uri:
                 break
             
-            # Safety check - if we hit max pages, warn user
-            if page_count >= max_pages:
-                print(f"Warning: Hit max_pages limit ({max_pages}). There may be more messages to fetch.")
-                break
+            # Small delay to avoid rate limiting
+            time_module.sleep(0.1)
+        
+        # Now save to database
+        with sync_lock:
+            sync_state['progress'] = f'Saving {len(all_messages):,} messages to database...'
         
         saved_count = 0
         skipped_count = 0
-        hit_limit = page_count >= max_pages
         
         # Helper function to parse SignalWire date format (RFC 2822)
         def parse_signalwire_date(date_str):
@@ -659,7 +671,6 @@ def trigger_sync():
                 return parsedate_to_datetime(date_str)
             except:
                 try:
-                    # Fallback to ISO format
                     return datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00'))
                 except:
                     return None
@@ -667,62 +678,195 @@ def trigger_sync():
         if MODELS_AVAILABLE and all_messages:
             session = Session()
             try:
-                # Get existing IDs in bulk
-                sids = [msg['sid'] for msg in all_messages]
-                existing_ids = set(
-                    row[0] for row in session.query(SMSLog.id).filter(SMSLog.id.in_(sids)).all()
-                )
-                
-                for msg in all_messages:
-                    if msg['sid'] in existing_ids:
-                        skipped_count += 1
-                        continue
+                # Process in batches of 500
+                batch_size = 500
+                for i in range(0, len(all_messages), batch_size):
+                    batch = all_messages[i:i+batch_size]
+                    sids = [msg['sid'] for msg in batch]
+                    existing_ids = set(
+                        row[0] for row in session.query(SMSLog.id).filter(SMSLog.id.in_(sids)).all()
+                    )
+                    
+                    for msg in batch:
+                        if msg['sid'] in existing_ids:
+                            skipped_count += 1
+                            continue
                         
-                    try:
-                        log = SMSLog(
-                            id=msg['sid'],
-                            date_created=parse_signalwire_date(msg.get('date_created')),
-                            date_sent=parse_signalwire_date(msg.get('date_sent')),
-                            to_number=msg.get('to'),
-                            from_number=msg.get('from'),
-                            status=msg.get('status'),
-                            error_code=int(msg['error_code']) if msg.get('error_code') else None,
-                            error_message=msg.get('error_message'),
-                            direction=msg.get('direction'),
-                            body=msg.get('body'),
-                            price=float(msg['price']) if msg.get('price') else 0
-                        )
-                        session.add(log)
-                        saved_count += 1
-                    except Exception as e:
-                        print(f"Error parsing message {msg['sid']}: {e}")
-                
-                session.commit()
+                        try:
+                            log = SMSLog(
+                                id=msg['sid'],
+                                date_created=parse_signalwire_date(msg.get('date_created')),
+                                date_sent=parse_signalwire_date(msg.get('date_sent')),
+                                to_number=msg.get('to'),
+                                from_number=msg.get('from'),
+                                status=msg.get('status'),
+                                error_code=int(msg['error_code']) if msg.get('error_code') else None,
+                                error_message=msg.get('error_message'),
+                                direction=msg.get('direction'),
+                                body=msg.get('body'),
+                                price=float(msg['price']) if msg.get('price') else 0
+                            )
+                            session.add(log)
+                            saved_count += 1
+                        except Exception as e:
+                            print(f"Error parsing message: {e}")
+                    
+                    session.commit()
+                    
+                    with sync_lock:
+                        sync_state['saved'] = saved_count
+                        sync_state['skipped'] = skipped_count
+                        sync_state['progress'] = f'Saved {saved_count:,} messages ({i + len(batch):,}/{len(all_messages):,})...'
+                    
             except Exception as e:
                 session.rollback()
-                print(f"Error saving messages: {e}")
-                return jsonify({'error': f'Database error: {str(e)}'}), 500
+                with sync_lock:
+                    sync_state['error'] = f'Database error: {str(e)}'
             finally:
                 session.close()
         
-        message = f'Fetched {len(all_messages):,} messages from {page_count} pages, saved {saved_count:,} new (skipped {skipped_count:,} existing)'
-        if hit_limit:
-            message += f'. WARNING: Hit page limit ({max_pages} pages). There may be more messages - consider syncing in smaller time windows.'
-        
-        return jsonify({
-            'success': True,
-            'fetched': len(all_messages),
-            'saved': saved_count,
-            'skipped': skipped_count,
-            'pages': page_count,
-            'hit_limit': hit_limit,
-            'message': message
-        })
-        
-    except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'SignalWire API error: {str(e)}'}), 500
+        with sync_lock:
+            sync_state['complete'] = True
+            sync_state['running'] = False
+            sync_state['saved'] = saved_count
+            sync_state['skipped'] = skipped_count
+            sync_state['progress'] = f'Complete! Fetched {len(all_messages):,}, saved {saved_count:,} new messages.'
+            
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        with sync_lock:
+            sync_state['error'] = str(e)
+            sync_state['running'] = False
+
+
+@app.route('/api/sync/start')
+@requires_auth
+def start_sync():
+    """Start a background sync from SignalWire API"""
+    global sync_state
+    import requests
+    from requests.auth import HTTPBasicAuth
+    
+    with sync_lock:
+        if sync_state['running']:
+            return jsonify({'error': 'Sync already in progress', 'status': sync_state}), 400
+    
+    PROJECT_ID = os.getenv('SIGNALWIRE_PROJECT_ID')
+    AUTH_TOKEN = os.getenv('SIGNALWIRE_AUTH_TOKEN')
+    SPACE_URL = os.getenv('SIGNALWIRE_SPACE_URL', '')
+    
+    if not all([PROJECT_ID, AUTH_TOKEN, SPACE_URL]):
+        return jsonify({'error': 'SignalWire credentials not configured'}), 500
+    
+    space = SPACE_URL.replace('https://', '').replace('http://', '').rstrip('/')
+    base_url = f"https://{space}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Messages.json"
+    
+    hours = int(request.args.get('hours', 1))
+    start_time = datetime.datetime.utcnow() - timedelta(hours=hours)
+    auth = HTTPBasicAuth(PROJECT_ID, AUTH_TOKEN)
+    
+    # Reset state
+    with sync_lock:
+        sync_state = {
+            'running': True,
+            'progress': 'Starting sync...',
+            'pages': 0,
+            'fetched': 0,
+            'saved': 0,
+            'skipped': 0,
+            'error': None,
+            'complete': False
+        }
+    
+    # Start background thread
+    thread = threading.Thread(
+        target=background_sync,
+        args=(hours, space, base_url, auth, start_time),
+        daemon=True
+    )
+    thread.start()
+    
+    return jsonify({'started': True, 'message': f'Sync started for last {hours} hours'})
+
+
+@app.route('/api/sync/status')
+@requires_auth
+def get_sync_status():
+    """Get current sync status"""
+    with sync_lock:
+        return jsonify(sync_state)
+
+
+@app.route('/api/sync/cancel')
+@requires_auth
+def cancel_sync():
+    """Cancel running sync"""
+    global sync_state
+    with sync_lock:
+        if sync_state['running']:
+            sync_state['running'] = False
+            sync_state['progress'] = 'Cancelled'
+            return jsonify({'cancelled': True})
+        return jsonify({'cancelled': False, 'message': 'No sync running'})
+
+
+@app.route('/api/sync/trigger')
+@requires_auth
+def trigger_sync():
+    """
+    Legacy sync endpoint - redirects to new background sync.
+    Kept for compatibility.
+    """
+    # Start background sync and return immediately
+    import requests
+    from requests.auth import HTTPBasicAuth
+    
+    global sync_state
+    
+    with sync_lock:
+        if sync_state['running']:
+            return jsonify({'error': 'Sync already in progress'}), 400
+    
+    PROJECT_ID = os.getenv('SIGNALWIRE_PROJECT_ID')
+    AUTH_TOKEN = os.getenv('SIGNALWIRE_AUTH_TOKEN')
+    SPACE_URL = os.getenv('SIGNALWIRE_SPACE_URL', '')
+    
+    if not all([PROJECT_ID, AUTH_TOKEN, SPACE_URL]):
+        return jsonify({'error': 'SignalWire credentials not configured'}), 500
+    
+    space = SPACE_URL.replace('https://', '').replace('http://', '').rstrip('/')
+    base_url = f"https://{space}/api/laml/2010-04-01/Accounts/{PROJECT_ID}/Messages.json"
+    
+    hours = int(request.args.get('hours', 1))
+    start_time = datetime.datetime.utcnow() - timedelta(hours=hours)
+    auth = HTTPBasicAuth(PROJECT_ID, AUTH_TOKEN)
+    
+    # Reset state
+    with sync_lock:
+        sync_state = {
+            'running': True,
+            'progress': 'Starting sync...',
+            'pages': 0,
+            'fetched': 0,
+            'saved': 0,
+            'skipped': 0,
+            'error': None,
+            'complete': False
+        }
+    
+    # Start background thread
+    thread = threading.Thread(
+        target=background_sync,
+        args=(hours, space, base_url, auth, start_time),
+        daemon=True
+    )
+    thread.start()
+    
+    # Return immediately - frontend will poll /api/sync/status
+    return jsonify({
+        'started': True,
+        'message': f'Background sync started for last {hours} hours. Poll /api/sync/status for progress.'
+    })
+
 
 @app.route('/api/db/stats')
 @requires_auth  

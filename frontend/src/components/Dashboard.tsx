@@ -208,42 +208,93 @@ export const Dashboard: React.FC = () => {
     setMessagesLoading(false);
   };
 
-  // Sync from SignalWire
+  // Sync from SignalWire - background sync with polling
+  const pollIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  
   const handleSync = async () => {
     setSyncing(true);
-    setSyncProgress('Connecting to SignalWire...');
+    setSyncProgress('Starting background sync...');
     setSyncResult(null);
     
     try {
-      setSyncProgress(`Fetching messages from last ${syncHours} hour(s)...`);
+      // Start background sync
+      const startRes = await fetch(`/api/sync/trigger?hours=${syncHours}`);
+      const startData = await startRes.json();
       
-      // No limit - fetch ALL messages in the time range
-      const res = await fetch(`/api/sync/trigger?hours=${syncHours}`);
-      const data = await res.json();
-      
-      if (data.error) {
-        setSyncResult({ success: false, message: data.error });
-      } else {
-        setSyncResult({ 
-          success: true, 
-          message: `Fetched ${data.fetched.toLocaleString()} messages from ${data.pages} pages. Saved ${data.saved.toLocaleString()} new messages (${data.skipped.toLocaleString()} already existed).`
-        });
-        
-        // Force refresh all dashboard data
-        setLoading(true);
-        await Promise.all([
-          loadData(startDate, endDate),
-          fetchDbStats().then(setDbStats)
-        ]);
-        setLoading(false);
+      if (startData.error) {
+        setSyncResult({ success: false, message: startData.error });
+        setSyncing(false);
+        return;
       }
+      
+      // Poll for status
+      const pollStatus = async () => {
+        try {
+          const statusRes = await fetch('/api/sync/status');
+          const status = await statusRes.json();
+          
+          setSyncProgress(status.progress || 'Syncing...');
+          
+          if (status.error) {
+            setSyncResult({ success: false, message: status.error });
+            setSyncing(false);
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+            return;
+          }
+          
+          if (status.complete || !status.running) {
+            setSyncing(false);
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+            
+            if (status.complete) {
+              setSyncResult({ 
+                success: true, 
+                message: `✅ Synced ${status.fetched?.toLocaleString() || 0} messages from ${status.pages || 0} pages. Saved ${status.saved?.toLocaleString() || 0} new messages.`
+              });
+              
+              // Refresh dashboard
+              setLoading(true);
+              await Promise.all([
+                loadData(startDate, endDate),
+                fetchDbStats().then(setDbStats)
+              ]);
+              setLoading(false);
+            }
+          }
+        } catch (e) {
+          console.error('Poll error:', e);
+        }
+      };
+      
+      // Poll every 1 second
+      pollIntervalRef.current = setInterval(pollStatus, 1000);
+      // Also poll immediately
+      pollStatus();
+      
     } catch (error) {
-      setSyncResult({ success: false, message: `Failed to sync: ${error instanceof Error ? error.message : 'Unknown error'}` });
-    } finally {
+      setSyncResult({ success: false, message: `Failed to start sync: ${error instanceof Error ? error.message : 'Unknown error'}` });
       setSyncing(false);
-      setSyncProgress('');
     }
   };
+  
+  const handleCancelSync = async () => {
+    try {
+      await fetch('/api/sync/cancel');
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      setSyncing(false);
+      setSyncProgress('');
+      setSyncResult({ success: false, message: 'Sync cancelled' });
+    } catch (e) {
+      console.error('Cancel error:', e);
+    }
+  };
+  
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
 
   // Initial load
   useEffect(() => {
@@ -677,26 +728,35 @@ export const Dashboard: React.FC = () => {
 
               {/* Info */}
               <div className="bg-slate-50 rounded-xl p-4 text-sm text-slate-600">
-                <p><strong>Note:</strong> This will fetch <strong>ALL</strong> messages from SignalWire for the selected time period. 
-                The sync will continue until all messages are retrieved. This may take several minutes for large volumes.</p>
+                <p><strong>Background Sync:</strong> This will fetch ALL messages from the selected time period. 
+                The sync runs in the background - you'll see live progress updates.</p>
                 <p className="mt-2 text-xs text-slate-500">
-                  For command-line syncing: <code className="bg-slate-200 px-2 py-1 rounded">python sync_logs.py --hours {syncHours}</code>
+                  For very large syncs (millions of messages), you can also use: <code className="bg-slate-200 px-2 py-1 rounded">python sync_logs.py --hours {syncHours}</code>
                 </p>
               </div>
             </div>
 
             <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
-              <button
-                onClick={() => setSyncModalOpen(false)}
-                className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium"
-              >
-                Cancel
-              </button>
+              {syncing ? (
+                <button
+                  onClick={handleCancelSync}
+                  className="px-4 py-2 text-red-600 hover:text-red-800 font-medium"
+                >
+                  Cancel Sync
+                </button>
+              ) : (
+                <button
+                  onClick={() => { setSyncModalOpen(false); setSyncResult(null); }}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium"
+                >
+                  {syncResult?.success ? 'Done' : 'Close'}
+                </button>
+              )}
               <button
                 onClick={handleSync}
                 disabled={syncing}
-                className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-xl
-                           hover:bg-blue-700 disabled:opacity-50 font-semibold"
+                className="flex items-center gap-2 px-6 py-2.5 text-white rounded-xl
+                           disabled:opacity-50 font-semibold bg-blue-600 hover:bg-blue-700"
               >
                 {syncing ? (
                   <>
@@ -706,7 +766,7 @@ export const Dashboard: React.FC = () => {
                 ) : (
                   <>
                     <Download size={16} />
-                    Start Sync
+                    {syncResult?.success ? 'Sync Again' : 'Start Sync'}
                   </>
                 )}
               </button>
